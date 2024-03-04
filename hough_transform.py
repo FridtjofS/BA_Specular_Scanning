@@ -7,296 +7,209 @@ from numba import jit
 import os
 from image_augmentation import combine_slices
 
-@jit(nopython=True)
 def calculate_hough_spaces(image):
-    
-    width, num_rotations = image.shape  # Anzahl der Rotationen
+  edges = cv2.Canny(image, 2, 5)
 
-    # Schritt 1: Kanten im Bild erkennen
-    #edges = cv2.Canny(image, 30, 100)
-    edges = image
-    # clip edges below a certain threshold
-    #edges[edges < 10] = 0
-    #for i in range(width):
-    #  for j in range(num_rotations):
-    #    if edges[i, j] < 10:
-    #      edges[i, j] = 0
+  gradient_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=5)
+  gradient_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=5)
 
-    #edges = cv2.imread('cat_test_canny.png',0)
-    # invert the image
-    #edges = cv2.bitwise_not(edges)
-
-    # plot edges
-    #plt.imshow(edges, cmap='inferno')
-    #plt.colorbar()
-    #plt.show()
-
-    x_center = width // 2
-
-    # Schritt 2: Hough-Räume initialisieren
-    hough_space_h1 = np.zeros((width // 2, num_rotations))
-    hough_space_h2 = np.zeros((width // 2, num_rotations))
-
-    #plt.imshow(hough_space_h1, cmap='inferno')
-    #plt.colorbar()
-    #plt.show()
-
-    for x in range(1,width - 1):
-        for theta in range(1, num_rotations):
-            if edges[x, theta] > 0:
-                for amplitude in range(1, width // 2):
-                    if amplitude == 0:
-                        continue
-                    elif amplitude < np.abs(x - x_center):
-                        #print("amplitude < np.abs(x - x_center), amplitude: " + str(amplitude) + ", x: " + str(x))
-                        continue
-                    try:
-                      phi = 0
-                      
-                      if ((int(image[x, theta]) - int(image[x - 1, theta])) / (int(image[x, theta]) - int (image[x, theta - 1]))) > 0: 
-                        phi = np.arcsin(((x - x_center) / amplitude)) - ((theta/num_rotations) * 2 * np.pi)
-                        # stretch phi from [-2pi, pi/2] to [0, num_rotations]
-                        phi = (phi + 2 * np.pi) * num_rotations / (2.5 * np.pi)
-                        phi = int(phi)
-
-                        hough_space_h1[amplitude, phi] += 1
+  return calculate_hough_spaces_helper(image, edges, gradient_x, gradient_y)
 
 
-                      else:
-                        phi = np.arccos((x - x_center) / amplitude) - ((theta/num_rotations) * 2 * np.pi) + (np.pi / 2)
-                        # stretch phi from [-3pi/2, pi] to [0, num_rotations]
-                        phi = (phi + 3 * np.pi / 2) * num_rotations / (2.5 * np.pi)
-                        phi = int(phi)
+@jit(nopython=True)
+def calculate_hough_spaces_helper(image, edges, gradient_x, gradient_y):
+  num_rotations, width = image.shape
+  x_center = width // 2
 
-                        hough_space_h2[amplitude, phi] += 1
-                      
-
-
-                      
-                      #hough_space_h1[amplitude, phi] += 1
-                      
-                      #hough_space_h2[amplitude, phi] += 1
-                    except:
-                      #print("Error: " + str(x) + ", " + str(theta) + ", " + str(amplitude))
-                      continue
+  # initialize hough spaces
+  hough_space_h1 = np.zeros((x_center, num_rotations))
+  hough_space_h2 = np.zeros((x_center, num_rotations))
 
 
+  # iterate over all pixels in the edge image
+  for x in range(1, width - 1):
+    for theta in range(1, num_rotations):
+      # if the pixel is an edge pixel
+      if edges[theta, x] > 0:
+        # only iterate over the amplitudes further away from the center than the current pixel
+        for amplitude in range(np.abs(x - x_center), x_center):
+          if amplitude == 0:
+            continue
+
+          # check if (delta_x / delta_theta) > 0 using the gradients
+          if gradient_x[theta, x] * gradient_y[theta, x] < 0:
+            # calculate the corresponding hough space phi
+            phi = np.arcsin((x - x_center) / amplitude) - ((theta / num_rotations) * 2 * np.pi)
+            phi = phi % (2 * np.pi)
+            phi = int(phi / (2 * np.pi) * (num_rotations - 1))
+            # add the amplitude to the corresponding hough space
+            hough_space_h1[amplitude, phi] += 1
+          else:
+            # calculate the corresponding hough space phi
+            phi = np.arccos((x - x_center) / amplitude) - ((theta / num_rotations) * 2 * np.pi) + (np.pi / 2)
+            phi = phi % (2 * np.pi)
+            phi = int(phi / (2 * np.pi) * (num_rotations - 1))
+            # add the amplitude to the corresponding hough space
+            hough_space_h2[amplitude, phi] += 1
+
+
+  return hough_space_h1, hough_space_h2
+
+def test_hough_space():
+    img = np.zeros((1440, 1440))
+    for x in range(1440):
+       for y in range(1440):
+          try:
+            phi = np.arcsin(((x - 720) / 581)) - ((y/1440) * 2 * np.pi)
+            phi = phi % (2 * np.pi)
+            phi = int(phi * 1440 / (2 * np.pi))
+            if phi == 188:
+              img[x, y] = 255
+          except:
+            continue
+    plt.imshow(img, cmap='jet')
+    plt.colorbar()
+    plt.show()
+   
+
+
+def post_process_hough_space(hough_space_h1, hough_space_h2):
     # remove low frequencies by subtracting the lowpass filtered image
-    #hough_space_h1 = hough_space_h1 - cv2.GaussianBlur(hough_space_h1, (5, 5), 0)
-    #hough_space_h2 = hough_space_h2 - cv2.GaussianBlur(hough_space_h2, (5, 5), 0)
+    hough_space_h1 = hough_space_h1 - cv2.GaussianBlur(hough_space_h1, (7, 7), 0)
+    hough_space_h2 = hough_space_h2 - cv2.GaussianBlur(hough_space_h2, (7, 7), 0)
+
+    # clip all values below 0 to 0
+    hough_space_h1[hough_space_h1 < 0] = 0
+    hough_space_h2[hough_space_h2 < 0] = 0
 
     # Weigh the matrix with weights e^(-0.001)*[1,2,...,A_max]
-    for amplitude in range(1, width // 2):
+    for amplitude in range(1, hough_space_h1.shape[0]):
         hough_space_h1[amplitude, :] = hough_space_h1[amplitude, :] * np.exp(-0.001 * amplitude)
         hough_space_h2[amplitude, :] = hough_space_h2[amplitude, :] * np.exp(-0.001 * amplitude)
 
-    # normalize the matrix
-    hough_space_h1 = hough_space_h1 / np.max(hough_space_h1)
-    hough_space_h2 = hough_space_h2 / np.max(hough_space_h2)
+    # normalize the matrix (can be negative after weighing)
+    hough_space_h1 = (hough_space_h1 - np.min(hough_space_h1)) / (np.max(hough_space_h1) - np.min(hough_space_h1))
+    hough_space_h2 = (hough_space_h2 - np.min(hough_space_h2)) / (np.max(hough_space_h2) - np.min(hough_space_h2))
 
-    # repress values below a certain threshold
-    #hough_space_h1[hough_space_h1 < 0.3] = 0
-    #hough_space_h2[hough_space_h2 < 0.3] = 0
+    hough_space_h1 = hough_space_h1 * 255
+    hough_space_h2 = hough_space_h2 * 255
 
-    # plot Hough-Räume
-    #plt.imshow(hough_space_h1, cmap='jet')
-    #plt.colorbar()
-    #plt.show()
+    # repress values below a certain threshold using Otsu's thresholding
+    t1, h1 = cv2.threshold(hough_space_h1.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
+    t2, h2 = cv2.threshold(hough_space_h2.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
 
-    #plt.imshow(hough_space_h2, cmap='jet')
-    #plt.colorbar()
-    #plt.show()
-
-    # save the hough spaces as images
-    #cv2.imwrite('hough_space_h1_2.png', hough_space_h1 * 255)
-    #cv2.imwrite('hough_space_h2_2.png', hough_space_h2 * 255)
+    hough_space_h1[hough_space_h1 < t1] = 0
+    hough_space_h2[hough_space_h2 < t2] = 0	
 
     return hough_space_h1, hough_space_h2
 
 
-def plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, image, original_image, extrema_image = None):
-    width, num_rotations = image.shape  # Anzahl der Rotationen
-    x_center = width // 2
+def plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, image):
+  edges = cv2.Canny(image, 2, 5)
 
-    # find the smallest non zero x value in the image
-    x = width
-    for i in range(num_rotations - 1):
-       for j in range(width - 1):
-          if original_image[j, i] > 0:
-              if j < x:
-                x = j
-                #print(j)
-              break
+  gradient_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=5)
+  gradient_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=5)
 
-    #plt.imshow(original_image, cmap='jet')
-    #plt.colorbar()
-    #plt.show()
+  num_rotations, width = image.shape
+  x_center = width // 2
 
-    #print (x)
-    x = 90
-    
+  indices_h1 = np.argwhere(hough_space_h1 > 50)
+  indices_h2 = np.argwhere(hough_space_h2 > 80)
 
+  # sort the indices by their amplitude
+  indices_h1 = sorted(indices_h1, key=lambda x: x[1], reverse=True)
+  indices_h2 = sorted(indices_h2, key=lambda x: x[1], reverse=False)
 
-    # set values to 0 which have a bigger y than (x_center - x)
-    #hough_space_h1[x_center - x:, :] = 0
-    #hough_space_h2[x_center - x:, :] = 0
+  output_h1 = np.zeros((num_rotations, width))
+  output_h2 = np.zeros((num_rotations, width))
 
+  for i in range(len(indices_h1)):
+    amplitude, phase = indices_h1[i]
+    phase = (phase / num_rotations) * 2 * np.pi
 
-    # ignore values above 100
-    #hough_space_h1[hough_space_h1 > 80] = 0
-    #hough_space_h2[hough_space_h2 > 80] = 0
+    for y in range(1, num_rotations - 1):
 
-    if extrema_image is None:
-      plt.imshow(hough_space_h1, cmap='jet')
-      plt.colorbar()
-      plt.show()
+      theta = (y / num_rotations) * 2 * np.pi
+      occlusion = (theta + phase) % (2 * np.pi)
+      if occlusion > np.pi / 2 and occlusion < 3 * np.pi / 2:
+        continue
+      x = int(x_center + amplitude * np.sin(theta + phase))
+      if gradient_x[y, x] * gradient_y[y, x] < 0: #and edges[y, x] > 0:
+        if output_h1[y, x] == 0:
+          mode = 3
+          if mode == 0:
+            output_h1[y, x] = 255
+          elif mode == 1:
+            # phase
+            output_h1[y, x] = int(phase / (2 * np.pi) * 255)
+          elif mode == 2:
+            # amplitude
+            output_h1[y, x] = int(amplitude / width * 255)
+          elif mode == 3:
+            # depth
+            # depending on the amplitude and offset the depth is calculated
+            # the depth is then normalized to [0, 255]
+            offset = theta + phase
+            depth = np.abs(np.cos(offset) * amplitude)
+            depth = int((depth / x_center) * 255)
+            output_h1[y, x] = depth
+            
 
-      # Calculate the Euclidean distance between two points
-      def euclidean_distance(point1, point2):
-        return np.sqrt(np.sum((point1 - point2) ** 2))
+  for i in range(len(indices_h2)):
+    amplitude, phase = indices_h2[i]
+    phase = (phase / num_rotations) * 2 * np.pi
+
+    for y in range(1, num_rotations - 1):
+      theta = (y / num_rotations) * 2 * np.pi
+      occlusion = (theta + phase) % (2 * np.pi)
+      if occlusion <= np.pi / 2 or occlusion >= 3 * np.pi / 2:
+        continue
+      x = int(x_center + amplitude * np.sin(theta + phase))
+      if gradient_x[y, x] * gradient_y[y, x] >= 0:# and edges[y, x] > 0:
+        if output_h2[y, x] == 0:
+          mode = 3
+          if mode == 0:
+            output_h2[y, x] = 255
+          elif mode == 1:
+            # phase
+            output_h2[y, x] = int(phase / (2 * np.pi) * 255)
+          elif mode == 2:
+            # amplitude
+            output_h2[y, x] = int(amplitude / width * 255)
+          elif mode == 3:
+            # depth
+            # depending on the amplitude and offset the depth is calculated
+            # the depth is then normalized to [0, 255]
+            offset = theta + phase
+            depth = np.abs(np.cos(offset) * amplitude)
+            depth = int((depth / x_center) * 255)
+            output_h2[y, x] = 255 - depth
+
+  plt.imshow(output_h1, cmap='jet', interpolation='none')
+  plt.colorbar()
+  plt.show()
+
+  plt.imshow(output_h2, cmap='jet', interpolation='none')
+  plt.colorbar()
+  plt.show()
+
+  # image to grayscale in one channel
+  #image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+  output = np.zeros((num_rotations, width, 3), dtype=np.uint8)
+  output[:, :, 0] = output_h1
+  output[:, :, 1] = output_h2
+  output[:, :, 2] = image
+
+  plt.imshow(output)
+  plt.show()
+
       
 
-      # Set the threshold for minimum distance between extrema
-      min_distance_threshold = 20
-
-      # Get the indices of the 20 most prominent extrema in hough_space_h1
-      indices_h1 = np.unravel_index(np.argsort(hough_space_h1.ravel())[-5000:], hough_space_h1.shape)
-
-      # Get the indices of the 20 most prominent extrema in hough_space_h2
-      indices_h2 = np.unravel_index(np.argsort(hough_space_h2.ravel())[-5000:], hough_space_h2.shape)
-
-      # Filter out extrema that are very close together
-      filtered_indices_h1 = []
-      filtered_indices_h2 = []
-
-      for i in range(len(indices_h1[0])):
-        point1 = np.array([indices_h1[0][i], indices_h1[1][i]])
-        is_close = False
-
-        for j in range(len(filtered_indices_h1)):
-          point2 = np.array([filtered_indices_h1[j][0], filtered_indices_h1[j][1]])
-          distance = euclidean_distance(point1, point2)
-
-          if distance < min_distance_threshold:
-            is_close = True
-            break
-
-        if not is_close:
-          filtered_indices_h1.append(point1)
-
-      for i in range(len(indices_h2[0])):
-        point1 = np.array([indices_h2[0][i], indices_h2[1][i]])
-        is_close = False
-
-        for j in range(len(filtered_indices_h2)):
-          point2 = np.array([filtered_indices_h2[j][0], filtered_indices_h2[j][1]])
-          distance = euclidean_distance(point1, point2)
-
-          if distance < min_distance_threshold:
-            is_close = True
-            break
-
-        if not is_close:
-          filtered_indices_h2.append(point1)
-
-      # overwrite with filtered indices being the extrema from every column
-      
-      #for i in range(hough_space_h1.shape[1]):
-      #  max_index = np.argmax(hough_space_h1[:, i])
-      #  filtered_indices_h1.append(np.array([max_index, i]))
-
-          
-      extrema_image = np.zeros(hough_space_h1.shape)
-      for x,y in filtered_indices_h1:
-        extrema_image[x,y] = 1
-
-
-    plt.imshow(extrema_image, cmap='jet')
-    plt.colorbar()
-    plt.show()
-
-    filtered_indices_h1 = []
-    filtered_indices_h2 = []
-    for i in range(extrema_image.shape[0]):
-      for j in range(extrema_image.shape[1]):
-        if extrema_image[i, j] > 0:
-          filtered_indices_h1.append((i, j))
-          filtered_indices_h2.append((i, j))
-
     
-    min_phi = 1000
-    max_phi = 0
-    min_phase = 1000
-    max_phase = 0
-    min_theta = 1000
-    max_theta = 0
+     
 
-    image2 = np.zeros((width, num_rotations))
 
-    for i in range(len(filtered_indices_h1)):
-      # Extract the amplitude and phase for h1
-      max_amp_h1, max_phase_h1 = filtered_indices_h1[i][0], filtered_indices_h1[i][1]
-      #max_amp_h1 = max_amp_h1 / (hough_space_h1.shape[0])
-      max_phase_h1 = max_phase_h1 * 2 * np.pi / num_rotations
-
-      # Extract the amplitude and phase for h2
-      #max_amp_h2, max_phase_h2 = indices_h2[0][i], indices_h2[1][i]
-      #max_amp_h2 = max_amp_h2 * 2 * np.pi / num_rotations
-      #max_phase_h2 = max_phase_h2 * 2 * np.pi / num_rotations
-
-      for y in range(num_rotations):
-        theta = y * 2 * np.pi / num_rotations
-
-        #if not((max_phase_h1 + theta)%(2*np.pi) <= np.pi / 2 or (max_phase_h1 + theta)%(2*np.pi) >= 3 * np.pi/2):
-        #  continue 
-        min_phi = max_phase_h1 + theta if max_phase_h1 + theta < min_phi else min_phi
-        max_phi = max_phase_h1 + theta if max_phase_h1 + theta > max_phi else max_phi
-        min_phase = max_phase_h1 if max_phase_h1 < min_phase else min_phase
-        max_phase = max_phase_h1 if max_phase_h1 > max_phase else max_phase
-        min_theta = theta if theta < min_theta else min_theta
-        max_theta = theta if theta > max_theta else max_theta
-        
-        x = int(x_center + ((max_amp_h1 * np.sin((max_phase_h1 + theta)))))# * x_center))
-        if x < 0 or x >= width:
-          print("Error x: " + str(x))
-          continue
-        
-        mode = 2
-        if mode == 0:
-          image2[y, x] += 1
-        if mode == 1:
-          image2[y, x] = max_amp_h1 if max_amp_h1 > image2[y, x] else image2[y, x]
-        elif mode == 2:
-          image2[y, x] = max_phase_h1 if max_phase_h1 > image2[y, x] else image2[y, x]
-        else:
-          image2[y, x] = 1
-        #x2 = int(x_center + ((max_amp_h2 * np.cos(theta - max_phase_h2))) * x_center)
-        #if x2 < 0 or x2 >= width:
-        #  continue
-        #image2[y, x2] = 1
-
-    plt.imshow(image2, cmap='jet')
-    plt.colorbar()
-    plt.show()
-    print ("min_phi: " + str(min_phi) + ", max_phi: " + str(max_phi))
-    print ("min_phase: " + str(min_phase) + ", max_phase: " + str(max_phase))
-    print ("min_theta: " + str(min_theta) + ", max_theta: " + str(max_theta))
-
-    # canny edge detection
-    edges = cv2.Canny(image, 30, 100)
-
-    # add image2 to the edges
-    #edges = (edges + image2 * 255) / 2
-
-    edges_new = np.zeros((width, num_rotations, 3))
-
-    edges_new[:,:,0] = edges
-    edges_new[:,:,1] = image2 * 255
-
-    
-    # plot edges
-    plt.imshow(edges_new)
-    plt.show()   
 
 
 def get_coordinates_from_input(hough_space_h1):
@@ -321,6 +234,7 @@ def get_coordinates_from_input(hough_space_h1):
     global coords
     coords = []
     cid = fig.canvas.mpl_connect('button_press_event', onclick)
+    plt.title('Please click the points to plot the sine waves')
     plt.show()
 
     new = np.zeros(hough_space_h1.shape)
@@ -437,7 +351,27 @@ def plot_hough_transform1point(image, x, theta):
 
 
 def main():
-  hough_space_h1, hough_space_h2 = calculate_hough_spaces(cv2.imread(os.path.join("rendered", "orthographic_theta_derivative.png"),0))
+  #test_hough_space()
+  #return
+
+  image = cv2.imread(os.path.join("rendered", "orthographic.png"),0)
+  edges = cv2.Canny(image, 2, 5)
+  # plot edges
+  plt.imshow(edges, cmap='jet')
+  plt.colorbar()
+  plt.show()
+  
+  #edges = cv2.imread("rendered/orthographic_theta_derivative.png",0)
+  #edges[edges < 10] = 0
+
+  #edges = cv2.imread("rendered/sine_curves.png",0)
+  # plot edges
+  #plt.imshow(edges, cmap='jet')
+  #plt.colorbar()
+  #plt.show()
+  
+
+  hough_space_h1, hough_space_h2 = calculate_hough_spaces(image)
 
   plt.imshow(hough_space_h1, cmap='jet')
   plt.colorbar()
@@ -446,6 +380,23 @@ def main():
   plt.imshow(hough_space_h2, cmap='jet')
   plt.colorbar()
   plt.show()
+
+  hough_space_h1, hough_space_h2 = post_process_hough_space(hough_space_h1, hough_space_h2)
+
+  plt.imshow(hough_space_h1, cmap='jet')
+  plt.colorbar()
+  plt.show()
+
+  plt.imshow(hough_space_h2, cmap='jet')
+  plt.colorbar()
+  plt.show()
+  
+
+  #extrema_image = get_coordinates_from_input(hough_space_h1)
+
+  hough_space_h2 = hough_space_h1
+
+  plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, image)
    
     
 

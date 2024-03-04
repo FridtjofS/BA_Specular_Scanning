@@ -167,3 +167,14 @@ def stitch_slice_diffs(img, horizontal=False):
       slice_diff = diff_and_integrate_slice(slice, False)
       new_slice_diff.append(slice_diff[height // 2])
   return new_slice_diff
+
+
+def main():
+  dir = os.path.join("rendered", "textured_head")
+  img = combine_slices(dir)
+  # save combined image
+  img.save(os.path.join("rendered", "textured_head.png"))
+
+
+if __name__ == '__main__':
+  main()
