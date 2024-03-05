@@ -349,12 +349,56 @@ def plot_hough_transform1point(image, x, theta):
     plt.show()
 
 
+def compute_3d_points(hough_space_h1, hough_space_h2, image, original_image):
+  width, num_rotations = image.shape  # Anzahl der Rotationen
+  
+  # initialize the 3d points as array of width x width (top view)
+  points = np.zeros((width, width))
+
+
+  indices_h1 = np.unravel_index(np.argsort(hough_space_h1.ravel()), hough_space_h1.shape)
+  indices_h2 = np.unravel_index(np.argsort(hough_space_h2.ravel()), hough_space_h2.shape)
+
+  # iterate over all indices
+  for i in range(len(indices_h1[0])):
+    # Extract the amplitude and phase for h1
+    amplitude_h1, phase_h1 = indices_h1[0][i], indices_h1[1][i]
+
+    # polar coordinates to cartesian coordinates
+    x = int(amplitude_h1 * np.cos((phase_h1 / num_rotations) * 2 * np.pi)) - width // 2
+    y = int(amplitude_h1 * np.sin((phase_h1 / num_rotations) * 2 * np.pi)) - width // 2
+
+    # set the point in the 3d points array
+    points[x, y] = hough_space_h1[amplitude_h1, phase_h1]
+
+  #
+  for i in range(len(indices_h2[0])):
+    # Extract the amplitude and phase for h2
+    amplitude_h2, phase_h2 = indices_h2[0][i], indices_h2[1][i]
+
+    # polar coordinates to cartesian coordinates
+    x = int(amplitude_h2 * np.cos((phase_h2 / num_rotations) * 2 * np.pi)) - width // 2
+    y = int(amplitude_h2 * np.sin((phase_h2 / num_rotations) * 2 * np.pi)) - width // 2
+
+    # set the point in the 3d points array
+    points[x, y] = hough_space_h2[amplitude_h2, phase_h2]
+  
+  # plot the 3d points
+  plt.imshow(points, cmap='jet')
+
+  #fig = plt.figure()
+  #ax = fig.add_subplot(111, projection='3d')
+  #x = np.arange(0, width, 1)
+  #y = np.arange(0, width, 1)
+  #X, Y = np.meshgrid(x, y)
+  #ax.plot_surface(X, Y, points, cmap='jet')
+  plt.show()
 
 def main():
   #test_hough_space()
   #return
 
-  image = cv2.imread(os.path.join("rendered", "orthographic.png"),0)
+  image = cv2.imread(os.path.join("rendered", "textured.png"),0)
   edges = cv2.Canny(image, 2, 5)
   # plot edges
   plt.imshow(edges, cmap='jet')
@@ -396,7 +440,9 @@ def main():
 
   hough_space_h2 = hough_space_h1
 
-  plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, image)
+  #plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, image)
+
+  compute_3d_points(hough_space_h1, hough_space_h2, image, image)
    
     
 

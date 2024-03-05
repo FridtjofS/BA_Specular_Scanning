@@ -272,7 +272,6 @@ def plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, image, origina
     plt.imshow(edges_new)
     plt.show()   
   
-
 def main():
 
   image = cv2.imread(os.path.join("rendered", "textured.png"),0)
