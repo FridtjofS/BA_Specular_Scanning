@@ -1,8 +1,10 @@
 import os
 import numpy as np
 from PIL import Image
+import cv2
 import matplotlib.pyplot as plt
-
+from pathlib import Path
+from numba import jit
 
 # combine frames, which consist of a single pixel slice, into a single image 
 def combine_slices(dir):
@@ -16,6 +18,76 @@ def combine_slices(dir):
         pixel = frame.getpixel((x, y))
         pixels[x, i * height + y] = pixel
   return new_img
+
+import imageio
+from tqdm.auto import tqdm
+
+def combine_imgs2(dir):
+    files = [os.path.join(dir,f) for f in os.listdir(dir) if f.endswith(".png")]
+    files = sorted(files)
+    #print(files)
+
+    img_count = len(files)
+    img = imageio.imread(files[0])
+    row_count = img.shape[0]
+    result = np.zeros([row_count, img_count, img.shape[1], img.shape[2]], dtype=img.dtype)
+    for i, img_path in tqdm(enumerate(files)):
+        img = imageio.imread(img_path)
+        for row in range(row_count):
+                result[row, i] = img[row]
+
+    for i, row_img in enumerate(result):
+        imageio.imwrite(os.path.join(dir,"rows",f"{i}.png"), row_img)
+
+
+
+
+
+
+def combine_images_to_wulsd_wrapper(dir):
+  
+  # frames using cv2
+  frames = [cv2.imread(os.path.join(dir, frame)) for frame in os.listdir(dir)]
+
+  # frames of shape (num_frames) to (num_frames, height, width, channels)
+
+  height, width, channels = frames[0].shape
+  
+  # reorder the array to be in num_frames, height, width, channels
+  #frames = np.array(frames).transpose(1, 0, 2, 3)
+
+  new_dir = os.path.join(dir, Path(dir).name + "_WULSD")
+  os.makedirs(new_dir, exist_ok=True)
+  #num_frames = len(frames)
+  
+  out_array = np.zeros((height, len(frames), width, channels), dtype=np.uint8)
+  print(out_array.shape)
+  for i in range(len(frames)):
+    for y in range(height):
+      for x in range(width):
+        if frames[i] is not None:
+          out_array[y, i, x, :] = frames[i][y, x, :]
+  
+  for i in range(height):
+    img = Image.fromarray(out_array[i])
+    img.save(os.path.join(new_dir, str(i) + ".png"))
+
+
+#@jit(nopython=True)
+def combine_images_to_wulsd(frames, width, height, channels, num_frames):
+  if not frames:
+    return np.zeros((height, width, num_frames, channels), dtype=np.uint8)
+  
+  out_array = np.zeros((height, width, num_frames, channels), dtype=np.uint8)
+  print(out_array.shape)
+  for y in range(height):
+    for x in range(width):
+      for i in range(num_frames):
+        out_array[y, x, i, :] = frames[i, y, x, :]
+        #out_array[y, x, i] = 1#temp
+        
+  return out_array
+  
 
 
 def horiz_derivative(img):
@@ -170,10 +242,10 @@ def stitch_slice_diffs(img, horizontal=False):
 
 
 def main():
-  dir = os.path.join("rendered", "textured_head")
-  img = combine_slices(dir)
-  # save combined image
-  img.save(os.path.join("rendered", "textured_head.png"))
+  dir = os.path.join("rendered", "full_1440")
+  combine_imgs2(dir)
+
+  
 
 
 if __name__ == '__main__':

@@ -6,6 +6,7 @@ import math
 from numba import jit
 import os
 from image_augmentation import combine_slices
+from tqdm.auto import tqdm
 
 def calculate_hough_spaces(image):
   edges = cv2.Canny(image, 2, 5)
@@ -75,8 +76,31 @@ def test_hough_space():
 
 def post_process_hough_space(hough_space_h1, hough_space_h2):
     # remove low frequencies by subtracting the lowpass filtered image
-    hough_space_h1 = hough_space_h1 - cv2.GaussianBlur(hough_space_h1, (7, 7), 0)
-    hough_space_h2 = hough_space_h2 - cv2.GaussianBlur(hough_space_h2, (7, 7), 0)
+    fspace_h1 = np.fft.fft2(hough_space_h1)
+    fspace_h2 = np.fft.fft2(hough_space_h2)
+    fspace_h1 = np.fft.fftshift(fspace_h1)
+    fspace_h2 = np.fft.fftshift(fspace_h2)
+    rows, cols = hough_space_h1.shape
+    crow, ccol = rows // 2, cols // 2
+    # create a mask first, center circle is 1, remaining all zeros
+    mask = np.zeros((rows, cols), np.uint8)
+    r = 50
+    center = [crow, ccol]
+    x, y = np.ogrid[:rows, :cols]
+    mask_area = (x - center[0]) ** 2 + (y - center[1]) ** 2 <= r*r
+    mask[mask_area] = 1
+    fshift_h1 = fspace_h1 * mask
+    fshift_h2 = fspace_h2 * mask
+
+    f_ishift_h1 = np.fft.ifftshift(fshift_h1)
+    f_ishift_h2 = np.fft.ifftshift(fshift_h2)
+    img_back_h1 = np.fft.ifft2(f_ishift_h1)
+    img_back_h2 = np.fft.ifft2(f_ishift_h2)
+    img_back_h1 = np.abs(img_back_h1)
+    img_back_h2 = np.abs(img_back_h2)
+
+    hough_space_h1 = hough_space_h1 - img_back_h1
+    hough_space_h2 = hough_space_h2 - img_back_h2
 
     # clip all values below 0 to 0
     hough_space_h1[hough_space_h1 < 0] = 0
@@ -87,19 +111,33 @@ def post_process_hough_space(hough_space_h1, hough_space_h2):
         hough_space_h1[amplitude, :] = hough_space_h1[amplitude, :] * np.exp(-0.001 * amplitude)
         hough_space_h2[amplitude, :] = hough_space_h2[amplitude, :] * np.exp(-0.001 * amplitude)
 
+    # clip all values below 0 to 0
+    hough_space_h1[hough_space_h1 < 0] = 0
+    hough_space_h2[hough_space_h2 < 0] = 0
+
     # normalize the matrix (can be negative after weighing)
-    hough_space_h1 = (hough_space_h1 - np.min(hough_space_h1)) / (np.max(hough_space_h1) - np.min(hough_space_h1))
-    hough_space_h2 = (hough_space_h2 - np.min(hough_space_h2)) / (np.max(hough_space_h2) - np.min(hough_space_h2))
+    if hough_space_h1.max() > 0:
+        hough_space_h1 = (hough_space_h1 - np.min(hough_space_h1)) / (np.max(hough_space_h1) - np.min(hough_space_h1))
+    else:
+        hough_space_h1 = hough_space_h1 * 0
+    if hough_space_h2.max() > 0:
+        hough_space_h2 = (hough_space_h2 - np.min(hough_space_h2)) / (np.max(hough_space_h2) - np.min(hough_space_h2))
+    else:
+        hough_space_h2 = hough_space_h2 * 0
+    
 
     hough_space_h1 = hough_space_h1 * 255
     hough_space_h2 = hough_space_h2 * 255
 
+    
+
     # repress values below a certain threshold using Otsu's thresholding
-    t1, h1 = cv2.threshold(hough_space_h1.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
-    t2, h2 = cv2.threshold(hough_space_h2.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
+    t1, _ = cv2.threshold(hough_space_h1.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
+    t2, _ = cv2.threshold(hough_space_h2.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
 
     hough_space_h1[hough_space_h1 < t1] = 0
     hough_space_h2[hough_space_h2 < t2] = 0	
+
 
     return hough_space_h1, hough_space_h2
 
@@ -197,9 +235,10 @@ def plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, image):
   #image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
   output = np.zeros((num_rotations, width, 3), dtype=np.uint8)
-  output[:, :, 0] = output_h1
-  output[:, :, 1] = output_h2
-  output[:, :, 2] = image
+  output[:, :, 0] = edges
+  output[:, :, 1] = output_h1
+  #output[:, :, 1] = output_h2
+  
 
   plt.imshow(output)
   plt.show()
@@ -348,16 +387,13 @@ def plot_hough_transform1point(image, x, theta):
     plt.colorbar()
     plt.show()
 
-
-def compute_3d_points(hough_space_h1, hough_space_h2, image, original_image):
+@jit(nopython=True)
+def compute_3d_points(hough_space_h1, hough_space_h2, indices_h1, indices_h2, image):
   width, num_rotations = image.shape  # Anzahl der Rotationen
+  width = width * 2
   
   # initialize the 3d points as array of width x width (top view)
   points = np.zeros((width, width))
-
-
-  indices_h1 = np.unravel_index(np.argsort(hough_space_h1.ravel()), hough_space_h1.shape)
-  indices_h2 = np.unravel_index(np.argsort(hough_space_h2.ravel()), hough_space_h2.shape)
 
   # iterate over all indices
   for i in range(len(indices_h1[0])):
@@ -383,67 +419,122 @@ def compute_3d_points(hough_space_h1, hough_space_h2, image, original_image):
     # set the point in the 3d points array
     points[x, y] = hough_space_h2[amplitude_h2, phase_h2]
   
-  # plot the 3d points
-  plt.imshow(points, cmap='jet')
+  return points
 
-  #fig = plt.figure()
-  #ax = fig.add_subplot(111, projection='3d')
-  #x = np.arange(0, width, 1)
-  #y = np.arange(0, width, 1)
-  #X, Y = np.meshgrid(x, y)
-  #ax.plot_surface(X, Y, points, cmap='jet')
-  plt.show()
+def full_hough_transform_3d(dir):
+  # iterate over all images in the directory
+  
+  frames = [cv2.imread(os.path.join(dir, frame), 0) for frame in os.listdir(dir)][500:600:20]
+  frames = frames[::-1]
+  
+  width = frames[0].shape[1]
+  points_3d = np.zeros((len(frames), width, width))
+  
+
+  for i, frame in tqdm(enumerate(frames)):
+
+    hough_space_h1, hough_space_h2 = calculate_hough_spaces(frame)
+    hough_space_h1, hough_space_h2 = post_process_hough_space(hough_space_h1, hough_space_h2)
+
+    #plt.imshow(hough_space_h1, cmap='jet')
+    #plt.colorbar()
+    #plt.show()
+
+    #indices_h1 = np.array(np.unravel_index(np.argsort(hough_space_h1.ravel())[-500:], hough_space_h1.shape))
+    #indices_h2 = np.array(np.unravel_index(np.argsort(hough_space_h2.ravel())[-327:], hough_space_h2.shape))
+
+
+    indices_h1 = np.transpose(np.argwhere(hough_space_h1 > 0))
+    if len(indices_h1[0]) > 5000:
+      # get the 5000 most prominent points in the hough spaces
+      indices_h1 = np.array(np.unravel_index(np.argsort(hough_space_h1.ravel())[-5000:], hough_space_h1.shape))
+
+    indices_h2 = np.transpose(np.argwhere(hough_space_h2 > 100))
+
+
+    #indices_h2 = np.argwhere(hough_space_h2 > 50)
+
+    points = compute_3d_points(hough_space_h1, hough_space_h2, indices_h1, indices_h2, frame)
+
+    # add the points to the 3d points array, with the frames index being the z coordinate
+    for x in range(width):
+      for y in range(width):
+        points_3d[i, x, y] = points[x, y]
+  # transpose the array to have the shape (width, width, num_frames)
+  points_3d = points_3d.transpose(1, 2, 0)
+
+  return points_3d
+
 
 def main():
-  #test_hough_space()
-  #return
 
-  image = cv2.imread(os.path.join("rendered", "textured.png"),0)
-  edges = cv2.Canny(image, 2, 5)
-  # plot edges
-  plt.imshow(edges, cmap='jet')
-  plt.colorbar()
-  plt.show()
+  if False: # curve plotting
+    init_img = cv2.imread(os.path.join("rendered", "full_1440","0050.png"))
+    # draw a line at y = 800
+    for x in range(init_img.shape[1]):
+      init_img[799, x][0] = 255
+      init_img[800, x][0] = 255
+      init_img[801, x][0] = 255
+    plt.imshow(init_img)
+    plt.show()
+
+
+    img = cv2.imread(os.path.join("rendered", "full_1440", "rows", "800.png"), 0)
+    #img = cv2.imread("rendered/orthographic.png", 0)
+    canny = cv2.Canny(img, 2, 5)
+    plt.imshow(img, cmap='jet')
+    plt.colorbar()
+    plt.show()
+
+    hough_space_h1, hough_space_h2 = calculate_hough_spaces(img)
+    #fig = plt.figure()
+    #ax1 = fig.add_subplot(121)
+    #ax2 = fig.add_subplot(122)
+    #ax1.imshow(hough_space_h1, cmap='jet')
+    #ax1.set_title('Hough Space 1')
+    #ax2.imshow(hough_space_h2, cmap='jet')
+    #ax2.set_title('Hough Space 2')
+    #plt.show()
+
+    hough_space_h1, hough_space_h2 = post_process_hough_space(hough_space_h1, hough_space_h2)
+
+    #fig2 = plt.figure()
+    #ax1 = fig2.add_subplot(121)
+    #ax2 = fig2.add_subplot(122)
+    #ax1.imshow(hough_space_h1, cmap='jet')
+    #ax1.set_title('Hough Space 1')
+    #ax2.imshow(hough_space_h2, cmap='jet')
+    #ax2.set_title('Hough Space 2')
+    #plt.show()
+
+    #plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, img)
+
+    indices_h1 = np.transpose(np.argwhere(hough_space_h1 > 0))
+    if len(indices_h1[0]) > 5000:
+      # get the 5000 most prominent points in the hough spaces
+      indices_h1 = np.array(np.unravel_index(np.argsort(hough_space_h1.ravel())[-5000:], hough_space_h1.shape))
+
+    indices_h2 = np.transpose(np.argwhere(hough_space_h2 > 100))
+
+    points = compute_3d_points(hough_space_h1, hough_space_h2, indices_h1, indices_h2, img)
+    plt.imshow(points, cmap='jet')
+    plt.colorbar()
+    plt.show()
+    
+     
+  if True: # 3d Model Plotting
+    dir = os.path.join("..", "scratch", "vonroi_wulsd")
+    points_3d = full_hough_transform_3d(dir)
+
+    # plot the 3d points of shape (width, width, num_frames) in 3d space
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    x, y, z = points_3d.nonzero()
+    ax.scatter(x, y, z, c=z, alpha=1)
+    plt.show()
   
-  #edges = cv2.imread("rendered/orthographic_theta_derivative.png",0)
-  #edges[edges < 10] = 0
 
-  #edges = cv2.imread("rendered/sine_curves.png",0)
-  # plot edges
-  #plt.imshow(edges, cmap='jet')
-  #plt.colorbar()
-  #plt.show()
-  
 
-  hough_space_h1, hough_space_h2 = calculate_hough_spaces(image)
-
-  plt.imshow(hough_space_h1, cmap='jet')
-  plt.colorbar()
-  plt.show()
-
-  plt.imshow(hough_space_h2, cmap='jet')
-  plt.colorbar()
-  plt.show()
-
-  hough_space_h1, hough_space_h2 = post_process_hough_space(hough_space_h1, hough_space_h2)
-
-  plt.imshow(hough_space_h1, cmap='jet')
-  plt.colorbar()
-  plt.show()
-
-  plt.imshow(hough_space_h2, cmap='jet')
-  plt.colorbar()
-  plt.show()
-  
-
-  #extrema_image = get_coordinates_from_input(hough_space_h1)
-
-  hough_space_h2 = hough_space_h1
-
-  #plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, image)
-
-  compute_3d_points(hough_space_h1, hough_space_h2, image, image)
-   
     
 
 
