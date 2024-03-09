@@ -7,6 +7,7 @@ from numba import jit
 import os
 from image_augmentation import combine_slices
 from tqdm.auto import tqdm
+import skimage as sk
 
 def calculate_hough_spaces(image):
   edges = cv2.Canny(image, 2, 5)
@@ -75,6 +76,7 @@ def test_hough_space():
 
 
 def post_process_hough_space(hough_space_h1, hough_space_h2):
+    
     # remove low frequencies by subtracting the lowpass filtered image
     fspace_h1 = np.fft.fft2(hough_space_h1)
     fspace_h2 = np.fft.fft2(hough_space_h2)
@@ -105,6 +107,7 @@ def post_process_hough_space(hough_space_h1, hough_space_h2):
     # clip all values below 0 to 0
     hough_space_h1[hough_space_h1 < 0] = 0
     hough_space_h2[hough_space_h2 < 0] = 0
+    
 
     # Weigh the matrix with weights e^(-0.001)*[1,2,...,A_max]
     for amplitude in range(1, hough_space_h1.shape[0]):
@@ -129,15 +132,76 @@ def post_process_hough_space(hough_space_h1, hough_space_h2):
     hough_space_h1 = hough_space_h1 * 255
     hough_space_h2 = hough_space_h2 * 255
 
+    # gradient in y direction
+    gradient_h1 = np.abs(cv2.Sobel(hough_space_h1, cv2.CV_64F, 0, 1, ksize=5))
+    #gradient_h1 = hough_space_h1 * hough_space_h1
+    gradient_h2 = np.abs(cv2.Sobel(hough_space_h2, cv2.CV_64F, 0, 1, ksize=5))
+    #gradient_h2 = hough_space_h2 * hough_space_h2
+
+    # normalize the gradient
+    gradient_h1 = (gradient_h1 - np.min(gradient_h1)) / (np.max(gradient_h1) - np.min(gradient_h1))
+    gradient_h2 = (gradient_h2 - np.min(gradient_h2)) / (np.max(gradient_h2) - np.min(gradient_h2))
+
+    gradient_h1 = gradient_h1 * 255
+    gradient_h2 = gradient_h2 * 255
+
+    gradient_h1[gradient_h1 < 10] = 0
+    gradient_h2[gradient_h2 < 10] = 0
+
+    # gaussian blur
+    #hough_space_h1 = cv2.GaussianBlur(hough_space_h1.astype(np.uint8), (9, 9), 0)
+    #hough_space_h2 = cv2.GaussianBlur(hough_space_h2.astype(np.uint8), (9, 9), 0)
+
+    
+    
+    
+
+    # min filter to remove small horizontal noise
+    #hough_space_h1 = cv2.erode(hough_space_h1.astype(np.uint8), np.ones((1, 5), np.uint8), iterations=1)
+    #hough_space_h2 = cv2.erode(hough_space_h2.astype(np.uint8), np.ones((1, 5), np.uint8), iterations=1)
+
+    # median filter
+    #hough_space_h1 = cv2.medianBlur(hough_space_h1.astype(np.uint8), 3)
+    #hough_space_h2 = cv2.medianBlur(hough_space_h2.astype(np.uint8), 3)
+
+
+
+    
+
+    t1, _ = cv2.threshold(gradient_h1.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
+    t2, _ = cv2.threshold(gradient_h2.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
+
+    hough_space_h1[gradient_h1 < t1] = 0
+    hough_space_h2[gradient_h2 < t2] = 0	
+
+    #hough_space_h1[ccordinatesh1[:, 0], ccordinatesh1[:, 1]] = 255
+    #hough_space_h2[ccordinatesh2[:, 0], ccordinatesh2[:, 1]] = 255
     
 
     # repress values below a certain threshold using Otsu's thresholding
-    t1, _ = cv2.threshold(hough_space_h1.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
-    t2, _ = cv2.threshold(hough_space_h2.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
+    #t1, _ = cv2.threshold(hough_space_h1.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
+    #t2, _ = cv2.threshold(hough_space_h2.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
+#
+    #hough_space_h1[hough_space_h1 < t1] = 0
+    #hough_space_h2[hough_space_h2 < t2] = 0	
 
-    hough_space_h1[hough_space_h1 < t1] = 0
-    hough_space_h2[hough_space_h2 < t2] = 0	
+    #hough_space_h1 = cv2.medianBlur(hough_space_h1.astype(np.uint8), 3)
+    #hough_space_h2 = cv2.medianBlur(hough_space_h2.astype(np.uint8), 3)
+    #hough_space_h1 = cv2.erode(hough_space_h1.astype(np.uint8), np.ones((1, 7), np.uint8), iterations=1)
+    #hough_space_h2 = cv2.erode(hough_space_h2.astype(np.uint8), np.ones((1, 7), np.uint8), iterations=1)
 
+    #coordinates_h1 = sk.feature.peak_local_max(gradient_h1, min_distance=10)
+    #coordinates_h2 = sk.feature.peak_local_max(gradient_h2, min_distance=10)
+#
+    #h1_temp = np.zeros(hough_space_h1.shape)
+    #h2_temp = np.zeros(hough_space_h2.shape)
+    #h1_temp[coordinates_h1[:, 0], coordinates_h1[:, 1]] = 1
+    #h2_temp[coordinates_h2[:, 0], coordinates_h2[:, 1]] = 1
+    ## set those coordinates which dont! have a local maximum to 0 by multiplying with the temp array
+    #hough_space_h1 = hough_space_h1 * h1_temp
+    #hough_space_h2 = hough_space_h2 * h2_temp
+
+    
 
     return hough_space_h1, hough_space_h2
 
@@ -172,7 +236,7 @@ def plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, image):
       if occlusion > np.pi / 2 and occlusion < 3 * np.pi / 2:
         continue
       x = int(x_center + amplitude * np.sin(theta + phase))
-      if gradient_x[y, x] * gradient_y[y, x] < 0: #and edges[y, x] > 0:
+      if True:#gradient_x[y, x] * gradient_y[y, x] < 0: #and edges[y, x] > 0:
         if output_h1[y, x] == 0:
           mode = 3
           if mode == 0:
@@ -203,7 +267,7 @@ def plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, image):
       if occlusion <= np.pi / 2 or occlusion >= 3 * np.pi / 2:
         continue
       x = int(x_center + amplitude * np.sin(theta + phase))
-      if gradient_x[y, x] * gradient_y[y, x] >= 0:# and edges[y, x] > 0:
+      if True:#gradient_x[y, x] * gradient_y[y, x] >= 0:# and edges[y, x] > 0:
         if output_h2[y, x] == 0:
           mode = 3
           if mode == 0:
@@ -424,7 +488,7 @@ def compute_3d_points(hough_space_h1, hough_space_h2, indices_h1, indices_h2, im
 def full_hough_transform_3d(dir):
   # iterate over all images in the directory
   
-  frames = [cv2.imread(os.path.join(dir, frame), 0) for frame in os.listdir(dir)][500:600:20]
+  frames = [cv2.imread(os.path.join(dir, frame), 0) for frame in os.listdir(dir)][::20]
   frames = frames[::-1]
   
   width = frames[0].shape[1]
@@ -445,11 +509,17 @@ def full_hough_transform_3d(dir):
 
 
     indices_h1 = np.transpose(np.argwhere(hough_space_h1 > 0))
-    if len(indices_h1[0]) > 5000:
-      # get the 5000 most prominent points in the hough spaces
-      indices_h1 = np.array(np.unravel_index(np.argsort(hough_space_h1.ravel())[-5000:], hough_space_h1.shape))
+    indice1_max = hough_space_h1.shape[1] // 5
+    if len(indices_h1[0]) > indice1_max:
+      # get the most prominent points in the hough spaces
+      indices_h1 = np.array(np.unravel_index(np.argsort(hough_space_h1.ravel())[-indice1_max:], hough_space_h1.shape))
 
-    indices_h2 = np.transpose(np.argwhere(hough_space_h2 > 100))
+    indices_h2 = np.array(np.unravel_index(np.argsort(hough_space_h2.ravel())[-10:], hough_space_h2.shape))
+    #indices_h2 = np.transpose(np.argwhere(hough_space_h2 > 0))
+    #indice2_max = hough_space_h2.shape[1] // 5
+    #if len(indices_h2[0]) > indice2_max:
+    #  # get the most prominent points in the hough spaces
+    #  indices_h2 = np.array(np.unravel_index(np.argsort(hough_space_h2.ravel())[-indice2_max:], hough_space_h2.shape))
 
 
     #indices_h2 = np.argwhere(hough_space_h2 > 50)
@@ -465,49 +535,52 @@ def full_hough_transform_3d(dir):
 
   return points_3d
 
+def double_image(image):
+  # double the image by interpolating every second slice
+  # shape
+  width, height = image.shape
+  new_image = np.zeros((2 * width, height), dtype=np.uint8)
+  for i in range(width):
+    new_image[2 * i] = image[i]
+    if i < width - 1:
+      new_image[2 * i + 1] = (image[i] + image[i + 1]) / 2
+  return new_image
+
 
 def main():
 
   if False: # curve plotting
-    init_img = cv2.imread(os.path.join("rendered", "full_1440","0050.png"))
-    # draw a line at y = 800
-    for x in range(init_img.shape[1]):
-      init_img[799, x][0] = 255
-      init_img[800, x][0] = 255
-      init_img[801, x][0] = 255
-    plt.imshow(init_img)
-    plt.show()
+    img = cv2.imread(os.path.join("..", "scratch", "vonroi_wulsd", "580.png"), 0)
+    #img = cv2.imread("rendered/Test_lord_rabbit.png", 0)
+    #img = double_image(img)
 
-
-    img = cv2.imread(os.path.join("rendered", "full_1440", "rows", "800.png"), 0)
-    #img = cv2.imread("rendered/orthographic.png", 0)
-    canny = cv2.Canny(img, 2, 5)
     plt.imshow(img, cmap='jet')
     plt.colorbar()
     plt.show()
+    
 
     hough_space_h1, hough_space_h2 = calculate_hough_spaces(img)
-    #fig = plt.figure()
-    #ax1 = fig.add_subplot(121)
-    #ax2 = fig.add_subplot(122)
-    #ax1.imshow(hough_space_h1, cmap='jet')
-    #ax1.set_title('Hough Space 1')
-    #ax2.imshow(hough_space_h2, cmap='jet')
-    #ax2.set_title('Hough Space 2')
-    #plt.show()
+    fig = plt.figure()
+    ax1 = fig.add_subplot(121)
+    ax2 = fig.add_subplot(122)
+    ax1.imshow(hough_space_h1, cmap='jet')
+    ax1.set_title('Hough Space 1')
+    ax2.imshow(hough_space_h2, cmap='jet')
+    ax2.set_title('Hough Space 2')
+    plt.show()
 
     hough_space_h1, hough_space_h2 = post_process_hough_space(hough_space_h1, hough_space_h2)
 
-    #fig2 = plt.figure()
-    #ax1 = fig2.add_subplot(121)
-    #ax2 = fig2.add_subplot(122)
-    #ax1.imshow(hough_space_h1, cmap='jet')
-    #ax1.set_title('Hough Space 1')
-    #ax2.imshow(hough_space_h2, cmap='jet')
-    #ax2.set_title('Hough Space 2')
-    #plt.show()
+    fig2 = plt.figure()
+    ax1 = fig2.add_subplot(121)
+    ax2 = fig2.add_subplot(122)
+    ax1.imshow(hough_space_h1, cmap='jet')
+    ax1.set_title('Hough Space 1')
+    ax2.imshow(hough_space_h2, cmap='jet')
+    ax2.set_title('Hough Space 2')
+    plt.show()
 
-    #plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, img)
+    plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, img)
 
     indices_h1 = np.transpose(np.argwhere(hough_space_h1 > 0))
     if len(indices_h1[0]) > 5000:
