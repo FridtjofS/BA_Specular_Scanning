@@ -8,6 +8,7 @@ import os
 from image_augmentation import combine_slices
 from tqdm.auto import tqdm
 import skimage as sk
+import open3d as o3d
 
 def calculate_hough_spaces(image):
   edges = cv2.Canny(image, 2, 5)
@@ -132,6 +133,8 @@ def post_process_hough_space(hough_space_h1, hough_space_h2):
     hough_space_h1 = hough_space_h1 * 255
     hough_space_h2 = hough_space_h2 * 255
 
+    
+
     # gradient in y direction
     gradient_h1 = np.abs(cv2.Sobel(hough_space_h1, cv2.CV_64F, 0, 1, ksize=5))
     #gradient_h1 = hough_space_h1 * hough_space_h1
@@ -139,14 +142,16 @@ def post_process_hough_space(hough_space_h1, hough_space_h2):
     #gradient_h2 = hough_space_h2 * hough_space_h2
 
     # normalize the gradient
-    gradient_h1 = (gradient_h1 - np.min(gradient_h1)) / (np.max(gradient_h1) - np.min(gradient_h1))
-    gradient_h2 = (gradient_h2 - np.min(gradient_h2)) / (np.max(gradient_h2) - np.min(gradient_h2))
+    if gradient_h1.max() > 0: 
+      gradient_h1 = (gradient_h1 - np.min(gradient_h1)) / (np.max(gradient_h1) - np.min(gradient_h1))
+    if gradient_h2.max() > 0:
+      gradient_h2 = (gradient_h2 - np.min(gradient_h2)) / (np.max(gradient_h2) - np.min(gradient_h2))
 
     gradient_h1 = gradient_h1 * 255
     gradient_h2 = gradient_h2 * 255
 
-    gradient_h1[gradient_h1 < 10] = 0
-    gradient_h2[gradient_h2 < 10] = 0
+    #gradient_h1[gradient_h1 < 10] = 0
+    #gradient_h2[gradient_h2 < 10] = 0
 
     # gaussian blur
     #hough_space_h1 = cv2.GaussianBlur(hough_space_h1.astype(np.uint8), (9, 9), 0)
@@ -170,7 +175,7 @@ def post_process_hough_space(hough_space_h1, hough_space_h2):
 
     t1, _ = cv2.threshold(gradient_h1.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
     t2, _ = cv2.threshold(gradient_h2.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
-
+    
     hough_space_h1[gradient_h1 < t1] = 0
     hough_space_h2[gradient_h2 < t2] = 0	
 
@@ -185,25 +190,72 @@ def post_process_hough_space(hough_space_h1, hough_space_h2):
     #hough_space_h1[hough_space_h1 < t1] = 0
     #hough_space_h2[hough_space_h2 < t2] = 0	
 
+
+    # maybeee???
     #hough_space_h1 = cv2.medianBlur(hough_space_h1.astype(np.uint8), 3)
     #hough_space_h2 = cv2.medianBlur(hough_space_h2.astype(np.uint8), 3)
+
+    # blur to get a heatmap
+    hough_space_h1 = cv2.GaussianBlur(hough_space_h1.astype(np.uint8), (19, 19), 0)
+    hough_space_h2 = cv2.GaussianBlur(hough_space_h2.astype(np.uint8), (19, 19), 0)
+
     #hough_space_h1 = cv2.erode(hough_space_h1.astype(np.uint8), np.ones((1, 7), np.uint8), iterations=1)
     #hough_space_h2 = cv2.erode(hough_space_h2.astype(np.uint8), np.ones((1, 7), np.uint8), iterations=1)
+
+    coordinates_h1 = sk.feature.peak_local_max(hough_space_h1, threshold_rel = 0.2, min_distance=5)
+    coordinates_h2 = sk.feature.peak_local_max(hough_space_h2, threshold_rel = 0.2, min_distance=5)
+
+    #hough_space_h1 = cv2.polylines(hough_space_h1, [coordinates_h1], False, 255, 1)
+    #hough_space_h2 = cv2.polylines(hough_space_h2, [coordinates_h2], False, 255, 1)
 
     #coordinates_h1 = sk.feature.peak_local_max(gradient_h1, min_distance=10)
     #coordinates_h2 = sk.feature.peak_local_max(gradient_h2, min_distance=10)
 #
-    #h1_temp = np.zeros(hough_space_h1.shape)
-    #h2_temp = np.zeros(hough_space_h2.shape)
-    #h1_temp[coordinates_h1[:, 0], coordinates_h1[:, 1]] = 1
-    #h2_temp[coordinates_h2[:, 0], coordinates_h2[:, 1]] = 1
-    ## set those coordinates which dont! have a local maximum to 0 by multiplying with the temp array
-    #hough_space_h1 = hough_space_h1 * h1_temp
-    #hough_space_h2 = hough_space_h2 * h2_temp
+    h1_temp = np.zeros(hough_space_h1.shape)
+    h2_temp = np.zeros(hough_space_h2.shape)
 
-    
+    '''
+    for i in range(len(coordinates_h1)):
+      h1_temp[coordinates_h1[i, 0], coordinates_h1[i, 1]] = 1
+      # find nearest coordinate and draw a line
+      nearest = (0, 0)
+      min_dist = 100000
+      for j in range(len(coordinates_h1)):
+        if i == j:
+          continue
+        dist = np.sqrt((coordinates_h1[i, 0] - coordinates_h1[j, 0]) ** 2 + (coordinates_h1[i, 1] - coordinates_h1[j, 1]) ** 2)
+        if dist < min_dist and dist != 0:
+          min_dist = dist
+          nearest = (coordinates_h1[j, 0], coordinates_h1[j, 1])
+      if nearest != (0, 0):
+        # draw a line between the two points
+        cv2.line(h1_temp, (coordinates_h1[i, 1], coordinates_h1[i, 0]), (nearest[1], nearest[0]), 1, 1)
 
+    for i in range(len(coordinates_h2)):
+      h2_temp[coordinates_h2[i, 0], coordinates_h2[i, 1]] = 1
+      # find nearest coordinate and draw a line
+      nearest = (0, 0)
+      min_dist = 100000
+      for j in range(len(coordinates_h2)):
+        if i == j:
+          continue
+        dist = np.sqrt((coordinates_h2[i, 0] - coordinates_h2[j, 0]) ** 2 + (coordinates_h2[i, 1] - coordinates_h2[j, 1]) ** 2)
+        if dist < min_dist and dist != 0:
+          min_dist = dist
+          nearest = (coordinates_h2[j, 0], coordinates_h2[j, 1])
+      # draw a line between the two points
+      cv2.line(h2_temp, (coordinates_h2[i, 1], coordinates_h2[i, 0]), (nearest[1], nearest[0]), 1, 1)
+
+      '''
+
+
+    h1_temp[coordinates_h1[:, 0], coordinates_h1[:, 1]] = 1
+    h2_temp[coordinates_h2[:, 0], coordinates_h2[:, 1]] = 1
+    # set those coordinates which dont! have a local maximum to 0 by multiplying with the temp array
+    hough_space_h1 = hough_space_h1 * h1_temp
+    hough_space_h2 = hough_space_h2 * h2_temp
     return hough_space_h1, hough_space_h2
+
 
 
 def plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, image):
@@ -453,8 +505,8 @@ def plot_hough_transform1point(image, x, theta):
 
 @jit(nopython=True)
 def compute_3d_points(hough_space_h1, hough_space_h2, indices_h1, indices_h2, image):
-  width, num_rotations = image.shape  # Anzahl der Rotationen
-  width = width * 2
+  init_width, num_rotations = image.shape  # Anzahl der Rotationen
+  width = init_width * 2
   
   # initialize the 3d points as array of width x width (top view)
   points = np.zeros((width, width))
@@ -463,10 +515,10 @@ def compute_3d_points(hough_space_h1, hough_space_h2, indices_h1, indices_h2, im
   for i in range(len(indices_h1[0])):
     # Extract the amplitude and phase for h1
     amplitude_h1, phase_h1 = indices_h1[0][i], indices_h1[1][i]
-
     # polar coordinates to cartesian coordinates
-    x = int(amplitude_h1 * np.cos((phase_h1 / num_rotations) * 2 * np.pi)) - width // 2
-    y = int(amplitude_h1 * np.sin((phase_h1 / num_rotations) * 2 * np.pi)) - width // 2
+    x = int(amplitude_h1 * np.cos((phase_h1 / init_width) * 2 * np.pi)) - init_width
+    y = int(amplitude_h1 * np.sin((phase_h1 / init_width) * 2 * np.pi)) - init_width
+
 
     # set the point in the 3d points array
     points[x, y] = hough_space_h1[amplitude_h1, phase_h1]
@@ -477,13 +529,32 @@ def compute_3d_points(hough_space_h1, hough_space_h2, indices_h1, indices_h2, im
     amplitude_h2, phase_h2 = indices_h2[0][i], indices_h2[1][i]
 
     # polar coordinates to cartesian coordinates
-    x = int(amplitude_h2 * np.cos((phase_h2 / num_rotations) * 2 * np.pi)) - width // 2
-    y = int(amplitude_h2 * np.sin((phase_h2 / num_rotations) * 2 * np.pi)) - width // 2
+    x = int(amplitude_h2 * np.cos((phase_h2 / init_width) * 2 * np.pi)) - width // 2
+    y = int(amplitude_h2 * np.sin((phase_h2 / init_width) * 2 * np.pi)) - width // 2
 
     # set the point in the 3d points array
     points[x, y] = hough_space_h2[amplitude_h2, phase_h2]
-  
+
   return points
+
+def compute_3d_coordinates(hough_space_h1, hough_space_h2, indices_h1, indices_h2, image, z):
+  init_width, num_rotations = image.shape  # Anzahl der Rotationen
+  width = init_width * 2
+  
+  points = []
+  for i in range(len(indices_h1[0])):
+    amplitude_h1, phase_h1 = indices_h1[0][i], indices_h1[1][i]
+    x = amplitude_h1 * np.cos((phase_h1 / init_width) * 2 * np.pi)
+    y = amplitude_h1 * np.sin((phase_h1 / init_width) * 2 * np.pi)
+    points.append((x, y, z, hough_space_h1[amplitude_h1, phase_h1]))
+
+  for i in range(len(indices_h2[0])):
+    amplitude_h2, phase_h2 = indices_h2[0][i], indices_h2[1][i]
+    x = amplitude_h2 * np.cos((phase_h2 / init_width) * 2 * np.pi)
+    y = amplitude_h2 * np.sin((phase_h2 / init_width) * 2 * np.pi)
+    points.append((x, y, z, hough_space_h2[amplitude_h2, phase_h2]))
+
+  return np.array(points)
 
 def full_hough_transform_3d(dir):
   # iterate over all images in the directory
@@ -514,12 +585,13 @@ def full_hough_transform_3d(dir):
       # get the most prominent points in the hough spaces
       indices_h1 = np.array(np.unravel_index(np.argsort(hough_space_h1.ravel())[-indice1_max:], hough_space_h1.shape))
 
-    indices_h2 = np.array(np.unravel_index(np.argsort(hough_space_h2.ravel())[-10:], hough_space_h2.shape))
-    #indices_h2 = np.transpose(np.argwhere(hough_space_h2 > 0))
-    #indice2_max = hough_space_h2.shape[1] // 5
-    #if len(indices_h2[0]) > indice2_max:
-    #  # get the most prominent points in the hough spaces
-    #  indices_h2 = np.array(np.unravel_index(np.argsort(hough_space_h2.ravel())[-indice2_max:], hough_space_h2.shape))
+
+    #indices_h2 = np.array(np.unravel_index(np.argsort(hough_space_h2.ravel())[-10:], hough_space_h2.shape))
+    indices_h2 = np.transpose(np.argwhere(hough_space_h2 > 0))
+    indice2_max = hough_space_h2.shape[1] // 5
+    if len(indices_h2[0]) > indice2_max:
+      # get the most prominent points in the hough spaces
+      indices_h2 = np.array(np.unravel_index(np.argsort(hough_space_h2.ravel())[-indice2_max:], hough_space_h2.shape))
 
 
     #indices_h2 = np.argwhere(hough_space_h2 > 50)
@@ -534,6 +606,58 @@ def full_hough_transform_3d(dir):
   points_3d = points_3d.transpose(1, 2, 0)
 
   return points_3d
+
+def full_hough_to_ply(dir):
+    # iterate over all images in the directory
+    frames = [cv2.imread(os.path.join(dir, frame), 0) for frame in os.listdir(dir)]
+    z_max = len(frames)
+    frames = frames[::20]
+    frames = frames[::-1]
+
+    width = frames[0].shape[1]
+    # floating points for ply point cloud
+    points_coordinates = []
+
+    with tqdm(total=len(frames), desc="Processing frames") as pbar:
+      for i, frame in enumerate(frames):
+        hough_space_h1, hough_space_h2 = calculate_hough_spaces(frame)
+        hough_space_h1, hough_space_h2 = post_process_hough_space(hough_space_h1, hough_space_h2)
+
+        indices_h1 = np.transpose(np.argwhere(hough_space_h1 > 0))
+        indice1_max = hough_space_h1.shape[1] // 5
+        if len(indices_h1[0]) > indice1_max:
+          # get the most prominent points in the hough spaces
+          indices_h1 = np.array(np.unravel_index(np.argsort(hough_space_h1.ravel())[-indice1_max:], hough_space_h1.shape))
+
+        indices_h2 = np.transpose(np.argwhere(hough_space_h2 > 0))
+        indice2_max = hough_space_h2.shape[1] // 5
+        if len(indices_h2[0]) > indice2_max:
+          # get the most prominent points in the hough spaces
+          indices_h2 = np.array(np.unravel_index(np.argsort(hough_space_h2.ravel())[-indice2_max:], hough_space_h2.shape))
+
+        z = i / len(frames) * z_max
+        points = compute_3d_coordinates(hough_space_h1, hough_space_h2, indices_h1, indices_h2, frame, z)
+        points_coordinates.extend(points)
+        
+        pbar.update(1)
+
+    # write the points to a ply file
+    with open("point_cloud.ply", "w") as file:
+      file.write("ply\n")
+      file.write("format ascii 1.0\n")
+      file.write("element vertex " + str(len(points_coordinates)) + "\n")
+      file.write("property float32 x\n")
+      file.write("property float32 y\n")
+      file.write("property float32 z\n")
+      file.write("property uint8 red\n")
+      file.write("property uint8 green\n")
+      file.write("property uint8 blue\n")
+      file.write("end_header\n")
+      for point in points_coordinates:
+        file.write(str(point[0]) + " " + str(point[1]) + " " + str(point[2]) + " " + str(int(point[3])) + " 0 " + str(int(255 - point[3])) + "\n")
+
+      
+
 
 def double_image(image):
   # double the image by interpolating every second slice
@@ -550,9 +674,9 @@ def double_image(image):
 def main():
 
   if False: # curve plotting
-    img = cv2.imread(os.path.join("..", "scratch", "vonroi_wulsd", "580.png"), 0)
-    #img = cv2.imread("rendered/Test_lord_rabbit.png", 0)
-    #img = double_image(img)
+    #img = cv2.imread(os.path.join("..", "scratch", "vonroi_wulsd", "580.png"), 0)
+    img = cv2.imread("rendered/Test_lord_rabbit.png", 0)
+    img = double_image(img)
 
     plt.imshow(img, cmap='jet')
     plt.colorbar()
@@ -571,6 +695,10 @@ def main():
 
     hough_space_h1, hough_space_h2 = post_process_hough_space(hough_space_h1, hough_space_h2)
 
+    # move the image by 500 pixels to the right
+    #hough_space_h1 = np.roll(hough_space_h1, 1000, axis=1)
+    #hough_space_h2 = np.roll(hough_space_h2, 1000, axis=1)
+
     fig2 = plt.figure()
     ax1 = fig2.add_subplot(121)
     ax2 = fig2.add_subplot(122)
@@ -580,22 +708,26 @@ def main():
     ax2.set_title('Hough Space 2')
     plt.show()
 
-    plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, img)
+    #plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, img)
 
     indices_h1 = np.transpose(np.argwhere(hough_space_h1 > 0))
     if len(indices_h1[0]) > 5000:
       # get the 5000 most prominent points in the hough spaces
       indices_h1 = np.array(np.unravel_index(np.argsort(hough_space_h1.ravel())[-5000:], hough_space_h1.shape))
 
-    indices_h2 = np.transpose(np.argwhere(hough_space_h2 > 100))
+    indices_h2 = np.transpose(np.argwhere(hough_space_h2 > 0))
+    if len(indices_h2[0]) > 5000:
+      # get the 5000 most prominent points in the hough spaces
+      indices_h2 = np.array(np.unravel_index(np.argsort(hough_space_h2.ravel())[-5000:], hough_space_h2.shape))
 
     points = compute_3d_points(hough_space_h1, hough_space_h2, indices_h1, indices_h2, img)
+    #points = cv2.GaussianBlur(points.astype(np.uint8), (9, 9), 0)
     plt.imshow(points, cmap='jet')
     plt.colorbar()
     plt.show()
     
      
-  if True: # 3d Model Plotting
+  if False: # 3d Model Plotting
     dir = os.path.join("..", "scratch", "vonroi_wulsd")
     points_3d = full_hough_transform_3d(dir)
 
@@ -603,9 +735,18 @@ def main():
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     x, y, z = points_3d.nonzero()
-    ax.scatter(x, y, z, c=z, alpha=1)
+    c = points_3d[x, y, z]
+    ax.scatter(x, y, z, c=c, cmap='jet', alpha=1)
     plt.show()
+
+  if True: # ply file creation
+    dir = os.path.join("..", "scratch", "vonroi_wulsd")
+    full_hough_to_ply(dir)
   
+  if True: # 3d Model Plotting
+    cloud = o3d.io.read_point_cloud("point_cloud_1080.ply")
+    # Get the certainty values from the point cloud
+    pcd = o3d.visualization.draw_geometries([cloud])
 
 
     
