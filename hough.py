@@ -1,11 +1,17 @@
-import numpy as np
 import cv2
+import numpy as np
 import matplotlib.pyplot as plt
-import os
+from scipy.signal import find_peaks
+import math
 from numba import jit
+import os
+from image_augmentation import combine_slices
+from tqdm.auto import tqdm
+import skimage as sk
+import open3d as o3d
 
-def calculate_hough_spaces(image):
-  edges = cv2.Canny(image, 20, 50)
+def calculate_hough_space(image):
+  edges = cv2.Canny(image, 2, 5)
 
   gradient_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=5)
   gradient_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=5)
@@ -19,8 +25,7 @@ def calculate_hough_spaces_helper(image, edges, gradient_x, gradient_y):
   x_center = width // 2
 
   # initialize hough spaces
-  hough_space_h1 = np.zeros((x_center, num_rotations))
-  hough_space_h2 = np.zeros((x_center, num_rotations))
+  hough_space = np.zeros((x_center, num_rotations))
 
 
   # iterate over all pixels in the edge image
@@ -34,260 +39,187 @@ def calculate_hough_spaces_helper(image, edges, gradient_x, gradient_y):
             continue
 
           # check if (delta_x / delta_theta) > 0 using the gradients
-          if gradient_x[theta, x] * gradient_y[theta, x] > 0:
+          if gradient_x[theta, x] * gradient_y[theta, x] < 0:
             # calculate the corresponding hough space phi
             phi = np.arcsin((x - x_center) / amplitude) - ((theta / num_rotations) * 2 * np.pi)
             phi = phi % (2 * np.pi)
             phi = int(phi / (2 * np.pi) * (num_rotations - 1))
             # add the amplitude to the corresponding hough space
-            hough_space_h1[amplitude, phi] += 1
+            hough_space[amplitude, phi] += 1
           else:
             # calculate the corresponding hough space phi
-            phi = np.arcsin((x - x_center) / amplitude) - ((theta / num_rotations) * 2 * np.pi) + (np.pi / 2)
+            phi = np.arccos((x - x_center) / amplitude) - ((theta / num_rotations) * 2 * np.pi) + (np.pi / 2)
             phi = phi % (2 * np.pi)
             phi = int(phi / (2 * np.pi) * (num_rotations - 1))
             # add the amplitude to the corresponding hough space
-            hough_space_h2[amplitude, phi] += 1
+            hough_space[amplitude, phi] += 1
 
+  return hough_space
 
-  return hough_space_h1, hough_space_h2
-  
+def post_process_hough_space(hough_space):
+    sum = np.sum(hough_space)
+    size = hough_space.shape[0] * hough_space.shape[1]
+    temp = size / sum if sum != 0 else 0.5
+    r = int(temp * min(hough_space.shape[0], hough_space.shape[1]))
 
+    # remove low frequencies by subtracting the lowpass filtered image
+    fspace = np.fft.fft2(hough_space)
+    fspace = np.fft.fftshift(fspace)
+    rows, cols = hough_space.shape
+    crow, ccol = rows // 2, cols // 2
+    # create a mask first, center circle is 1, remaining all zeros
+    mask = np.zeros((rows, cols), np.uint8)
+    center = [crow, ccol]
+    x, y = np.ogrid[:rows, :cols]
+    mask_area = (x - center[0]) ** 2 + (y - center[1]) ** 2 <= r**2
+    mask[mask_area] = 1
+    fshift = fspace * mask
 
-def plot_curves_from_hough_spaces(hough_space_h1, hough_space_h2, image, original_image, extrema_image = None):
-    width, num_rotations = image.shape  # Anzahl der Rotationen
-    x_center = width // 2
+    f_ishift = np.fft.ifftshift(fshift)
+    img_back = np.fft.ifft2(f_ishift)
+    img_back = np.abs(img_back)
 
-    # find the smallest non zero x value in the image
-    x = width
-    for i in range(num_rotations - 1):
-       for j in range(width - 1):
-          if original_image[j, i] > 0:
-              if j < x:
-                x = j
-                #print(j)
-              break
+    hough_space = hough_space - img_back
 
-    #plt.imshow(original_image, cmap='jet')
-    #plt.colorbar()
-    #plt.show()
-
-    #print (x)
-    x = 90
+    # clip all values below 0 to 0
+    hough_space[hough_space < 0] = 0
     
 
+    # Weigh the matrix with weights e^(-0.001)*[1,2,...,A_max]
+    for amplitude in range(1, hough_space.shape[0]):
+        hough_space[amplitude, :] = hough_space[amplitude, :] * np.exp(-0.001 * amplitude)
 
-    # set values to 0 which have a bigger y than (x_center - x)
-    #hough_space_h1[x_center - x:, :] = 0
-    #hough_space_h2[x_center - x:, :] = 0
+    # normalize the matrix
+    hough_space = (hough_space - np.min(hough_space)) / (np.max(hough_space) - np.min(hough_space))
 
+    hough_space = hough_space * 255
 
-    # ignore values above 100
-    #hough_space_h1[hough_space_h1 > 80] = 0
-    #hough_space_h2[hough_space_h2 > 80] = 0
+    # gradient in y direction
+    gradient_hough = np.abs(cv2.Sobel(hough_space, cv2.CV_64F, 0, 1, ksize=5))
 
-    if extrema_image is None:
-      plt.imshow(hough_space_h1, cmap='jet')
-      plt.colorbar()
-      plt.show()
+    # normalize the gradient
+    if gradient_hough.max() > 0: 
+      gradient_hough = (gradient_hough - np.min(gradient_hough)) / (np.max(gradient_hough) - np.min(gradient_hough))
 
-      # get the indices of the 20 most prominent extrema in hough_space_h1
-      indices_h1 = np.unravel_index(np.argsort(hough_space_h1.ravel())[-1000:], hough_space_h1.shape)
-      indices_h2 = np.unravel_index(np.argsort(hough_space_h2.ravel())[-500:], hough_space_h2.shape)
-      extrema_image = np.zeros(hough_space_h1.shape)
-      for i in range(len(indices_h1[0])):
-        extrema_image[indices_h1[0][i], indices_h1[1][i]] = 1
-         
+    gradient_hough = gradient_hough * 255
+
+    t, _ = cv2.threshold(gradient_hough.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
+    
+    hough_space[gradient_hough < t] = 0
+
+    coordinates_hough = sk.feature.peak_local_max(hough_space, threshold_rel = 0.2, min_distance=5)
+    hough_temp = np.zeros(hough_space.shape)
+
+    '''
+    for i in range(len(coordinates_h1)):
+      h1_temp[coordinates_h1[i, 0], coordinates_h1[i, 1]] = 1
+      # find nearest coordinate and draw a line
+      nearest = (0, 0)
+      min_dist = 100000
+      for j in range(len(coordinates_h1)):
+        if i == j:
+          continue
+        dist = np.sqrt((coordinates_h1[i, 0] - coordinates_h1[j, 0]) ** 2 + (coordinates_h1[i, 1] - coordinates_h1[j, 1]) ** 2)
+        if dist < min_dist and dist != 0:
+          min_dist = dist
+          nearest = (coordinates_h1[j, 0], coordinates_h1[j, 1])
+      if nearest != (0, 0):
+        # draw a line between the two points
+        cv2.line(h1_temp, (coordinates_h1[i, 1], coordinates_h1[i, 0]), (nearest[1], nearest[0]), 1, 1)
+
+    for i in range(len(coordinates_h2)):
+      h2_temp[coordinates_h2[i, 0], coordinates_h2[i, 1]] = 1
+      # find nearest coordinate and draw a line
+      nearest = (0, 0)
+      min_dist = 100000
+      for j in range(len(coordinates_h2)):
+        if i == j:
+          continue
+        dist = np.sqrt((coordinates_h2[i, 0] - coordinates_h2[j, 0]) ** 2 + (coordinates_h2[i, 1] - coordinates_h2[j, 1]) ** 2)
+        if dist < min_dist and dist != 0:
+          min_dist = dist
+          nearest = (coordinates_h2[j, 0], coordinates_h2[j, 1])
+      # draw a line between the two points
+      cv2.line(h2_temp, (coordinates_h2[i, 1], coordinates_h2[i, 0]), (nearest[1], nearest[0]), 1, 1)
 
       '''
 
-      # Calculate the Euclidean distance between two points
-      def euclidean_distance(point1, point2):
-        return np.sqrt(np.sum((point1 - point2) ** 2))
-      
 
-      # Set the threshold for minimum distance between extrema
-      min_distance_threshold = 20
+    hough_temp[coordinates_hough[:, 0], coordinates_hough[:, 1]] = 1
+    ## set those coordinates which dont! have a local maximum to 0 by multiplying with the temp array
+    hough_space = hough_space * hough_temp
+    return hough_space
 
-      # Get the indices of the 20 most prominent extrema in hough_space_h1
-      indices_h1 = np.unravel_index(np.argsort(hough_space_h1.ravel())[-5000:], hough_space_h1.shape)
-
-      # Get the indices of the 20 most prominent extrema in hough_space_h2
-      indices_h2 = np.unravel_index(np.argsort(hough_space_h2.ravel())[-5000:], hough_space_h2.shape)
-
-      # Filter out extrema that are very close together
-      filtered_indices_h1 = []
-      filtered_indices_h2 = []
-
-      for i in range(len(indices_h1[0])):
-        point1 = np.array([indices_h1[0][i], indices_h1[1][i]])
-        is_close = False
-
-        for j in range(len(filtered_indices_h1)):
-          point2 = np.array([filtered_indices_h1[j][0], filtered_indices_h1[j][1]])
-          distance = euclidean_distance(point1, point2)
-
-          if distance < min_distance_threshold:
-            is_close = True
-            break
-
-        if not is_close:
-          filtered_indices_h1.append(point1)
-
-      for i in range(len(indices_h2[0])):
-        point1 = np.array([indices_h2[0][i], indices_h2[1][i]])
-        is_close = False
-
-        for j in range(len(filtered_indices_h2)):
-          point2 = np.array([filtered_indices_h2[j][0], filtered_indices_h2[j][1]])
-          distance = euclidean_distance(point1, point2)
-
-          if distance < min_distance_threshold:
-            is_close = True
-            break
-
-        if not is_close:
-          filtered_indices_h2.append(point1)
-
-      # overwrite with filtered indices being the extrema from every column
-      
-      #for i in range(hough_space_h1.shape[1]):
-      #  max_index = np.argmax(hough_space_h1[:, i])
-      #  filtered_indices_h1.append(np.array([max_index, i]))
-
-          
-      extrema_image = np.zeros(hough_space_h1.shape)
-      for x,y in filtered_indices_h1:
-        extrema_image[x,y] = 1
-    '''
-
-    plt.imshow(extrema_image, cmap='jet')
-    plt.colorbar()
-    plt.show()
-
-    
-
-    filtered_indices_h1 = []
-    filtered_indices_h2 = []
-    for i in range(extrema_image.shape[0]):
-      for j in range(extrema_image.shape[1]):
-        if extrema_image[i, j] > 0:
-          filtered_indices_h1.append((i, j))
-          filtered_indices_h2.append((i, j))
-
-    # sort the filtered_indices_h1 by the amplitude
-    filtered_indices_h1 = sorted(filtered_indices_h1, key=lambda x: x[0], reverse=True)
-    filtered_indices_h2 = sorted(filtered_indices_h2, key=lambda x: x[0], reverse=False)
-
-    
-    #min_phi = 1000
-    #max_phi = 0
-    #min_phase = 1000
-    #max_phase = 0
-    #min_theta = 1000
-    #max_theta = 0
-
-    image2 = np.zeros((width, num_rotations))
-
-    for i in range(len(filtered_indices_h1)):
-      # Extract the amplitude and phase for h1
-      max_amp_h1, max_phase_h1 = filtered_indices_h1[i][0], filtered_indices_h1[i][1]
-      #max_amp_h1 = max_amp_h1 / (hough_space_h1.shape[0])
-      max_phase_h1 = max_phase_h1 * 2 * np.pi / num_rotations
-
-      #print("max_amp_h1: " + str(max_amp_h1) + ", max_phase_h1: " + str(max_phase_h1))
-
-      # Extract the amplitude and phase for h2
-      #max_amp_h2, max_phase_h2 = indices_h2[0][i], indices_h2[1][i]
-      #max_amp_h2 = max_amp_h2 * 2 * np.pi / num_rotations
-      #max_phase_h2 = max_phase_h2 * 2 * np.pi / num_rotations
-
-      for y in range(num_rotations):
-        theta = (y * 2 * np.pi) / num_rotations
-        occlusion = (theta + max_phase_h1) % (2 * np.pi) 
-        if occlusion <= np.pi / 2 or occlusion >= 3 * np.pi / 2:
-          x = int(x_center + ((max_amp_h1 * np.sin((max_phase_h1 + theta)))))
-          mode = 2
-          if mode == 0:
-            image2[y, x] += 1
-          if mode == 1:
-            image2[y, x] = max_amp_h1 if max_amp_h1 > image2[y, x] else image2[y, x]
-          elif mode == 2:
-            image2[y, x] = max_phase_h1 if max_phase_h1 > image2[y, x] else image2[y, x]
-          else:
-            image2[y, x] = 1
-           
-
-        #if not((max_phase_h1 + theta)%(2*np.pi) <= np.pi / 2 or (max_phase_h1 + theta)%(2*np.pi) >= 3 * np.pi/2):
-        #  continue 
-        #min_phi = max_phase_h1 + theta if max_phase_h1 + theta < min_phi else min_phi
-        #max_phi = max_phase_h1 + theta if max_phase_h1 + theta > max_phi else max_phi
-        #min_phase = max_phase_h1 if max_phase_h1 < min_phase else min_phase
-        #max_phase = max_phase_h1 if max_phase_h1 > max_phase else max_phase
-        #min_theta = theta if theta < min_theta else min_theta
-        #max_theta = theta if theta > max_theta else max_theta
-        
-        #x = int(x_center + ((max_amp_h1 * np.sin((max_phase_h1 + theta)))))# * x_center))
-        #if x < 0 or x >= width:
-        #  print("Error x: " + str(x))
-        #  continue
-        #
-        #mode = 2
-        #if mode == 0:
-        #  image2[y, x] += 1
-        #if mode == 1:
-        #  image2[y, x] = max_amp_h1 if max_amp_h1 > image2[y, x] else image2[y, x]
-        #elif mode == 2:
-        #  image2[y, x] = max_phase_h1 if max_phase_h1 > image2[y, x] else image2[y, x]
-        #else:
-        #  image2[y, x] = 1
-        #x2 = int(x_center + ((max_amp_h2 * np.cos(theta - max_phase_h2))) * x_center)
-        #if x2 < 0 or x2 >= width:
-        #  continue
-        #image2[y, x2] = 1
-
-    plt.imshow(image2, cmap='jet')
-    plt.colorbar()
-    plt.show()
-    # save the image2 as an image
-    cv2.imwrite('rendered/sine curves.png', image2 * 255)
-
-    #print ("min_phi: " + str(min_phi) + ", max_phi: " + str(max_phi))
-    #print ("min_phase: " + str(min_phase) + ", max_phase: " + str(max_phase))
-    #print ("min_theta: " + str(min_theta) + ", max_theta: " + str(max_theta))
-
-    # canny edge detection
-    edges = cv2.Canny(image, 30, 100)
-
-    # add image2 to the edges
-    #edges = (edges + image2 * 255) / 2
-
-    edges_new = np.zeros((width, num_rotations, 3))
-
-    edges_new[:,:,0] = edges
-    edges_new[:,:,1] = image2 * 255
-
-    
-    # plot edges
-    plt.imshow(edges_new)
-    plt.show()   
+def compute_3d_coordinates(hough_space, indices, image, z):
+  init_width, num_rotations = image.shape  # Anzahl der Rotationen
+  width = init_width * 2
   
+  points = []
+  for i in range(len(indices[0])):
+    amplitude_h1, phase_h1 = indices[0][i], indices[1][i]
+    x = amplitude_h1 * np.cos((phase_h1 / init_width) * 2 * np.pi)
+    y = amplitude_h1 * np.sin((phase_h1 / init_width) * 2 * np.pi)
+    points.append((x, y, z, hough_space[amplitude_h1, phase_h1]))
+
+  return np.array(points)
+
+def full_hough_to_ply(dir):
+    # iterate over all images in the directory
+    frames = [cv2.imread(os.path.join(dir, frame), 0) for frame in os.listdir(dir)]
+    z_max = len(frames)
+    #frames = frames[::20]
+    frames = frames[::-1]
+
+    width = frames[0].shape[1]
+    # floating points for ply point cloud
+    points_coordinates = []
+
+    with tqdm(total=len(frames), desc="Processing frames") as pbar:
+      for i, frame in enumerate(frames):
+        hough_space = calculate_hough_space(frame)
+        hough_space = post_process_hough_space(hough_space)
+
+        indices = np.transpose(np.argwhere(hough_space > 0))
+
+        z = i / len(frames) * z_max
+        points = compute_3d_coordinates(hough_space, indices, frame, z)
+        points_coordinates.extend(points)
+        
+        pbar.update(1)
+
+    # write the points to a ply file
+    with open("point_cloud_test.ply", "w") as file:
+      file.write("ply\n")
+      file.write("format ascii 1.0\n")
+      file.write("element vertex " + str(len(points_coordinates)) + "\n")
+      file.write("property float32 x\n")
+      file.write("property float32 y\n")
+      file.write("property float32 z\n")
+      file.write("property uint8 red\n")
+      file.write("property uint8 green\n")
+      file.write("property uint8 blue\n")
+      file.write("end_header\n")
+      for point in points_coordinates:
+        file.write(str(point[0]) + " " + str(point[1]) + " " + str(point[2]) + " " + str(int(point[3])) + " 0 " + str(int(255 - point[3])) + "\n")
+
 def main():
+  dir = os.path.join("..", "scratch", "vonroi_wulsd")
+  full_hough_to_ply(dir)
 
-  image = cv2.imread(os.path.join("rendered", "textured.png"),0)
-  #edges = cv2.Canny(image, 20, 50)
-  # pad the image with 100 pixels of black on left and right
-  edges = np.pad(image, ((0, 0), (300, 300)), 'constant', constant_values=0)
+  cloud = o3d.io.read_point_cloud("point_cloud_test.ply")
+  # normalize the colors
+  colors = np.asarray(cloud.colors)
+  max = np.max(colors[:, 2])
+  min = np.min(colors[:, 2])
+  colors[:, 2] = (colors[:, 2] - min) / (max - min)
 
-  image = edges
-  hough_space_h1, hough_space_h2 = calculate_hough_spaces(image)
-  plt.imshow(hough_space_h1, cmap='jet')
-  plt.colorbar()
-  plt.show()
+  points = o3d.utility.Vector3dVector(cloud.points)
 
-  plt.imshow(hough_space_h2, cmap='jet')
-  plt.colorbar()
-  plt.show()
+  # use colormap to color the point cloud
+  cmap = plt.get_cmap('inferno')
+  colors = cmap(colors[:, 2])[:, :3]
+  cloud.colors = o3d.utility.Vector3dVector(colors)
+  pcd = o3d.visualization.draw_geometries([cloud])
 
 if __name__ == "__main__":
   main()

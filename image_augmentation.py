@@ -36,7 +36,7 @@ def combine_imgs2(dir):
         for row in range(row_count):
                 result[row, i] = img[row]
 
-    for i, row_img in enumerate(result):
+    for i, row_img in tqdm(enumerate(result)):
         imageio.imwrite(os.path.join(dir,"rows",f"{i}.png"), row_img)
 
 
@@ -242,8 +242,13 @@ def stitch_slice_diffs(img, horizontal=False):
 
 
 def main():
-  dir = os.path.join("rendered", "full_1440")
+  dir = os.path.join("..", "scratch", "full_persp_50mm_2.5m")
   combine_imgs2(dir)
+
+  #img = combine_slices(dir)
+  #img.show()
+  #img.save(os.path.join(dir, "combined.png"))
+
 
   
 

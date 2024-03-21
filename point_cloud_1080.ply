@@ -4,9 +4,9 @@ element vertex 70825
 property float32 x
 property float32 y
 property float32 z
-property uint8 red
-property uint8 green
-property uint8 blue
+property uchar blue
+property uchar green
+property uchar red
 end_header
 -1425.8397965154131 -1269.5872990728828 17.0 6 0 249
 -1420.662234295484 -1256.0134493568694 17.0 7 0 248
