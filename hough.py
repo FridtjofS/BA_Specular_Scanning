@@ -167,7 +167,7 @@ def full_hough_to_ply(dir):
     # iterate over all images in the directory
     frames = [cv2.imread(os.path.join(dir, frame), 0) for frame in os.listdir(dir)]
     z_max = len(frames)
-    #frames = frames[::20]
+    #frames = frames[::100]
     frames = frames[::-1]
 
     width = frames[0].shape[1]
@@ -203,10 +203,12 @@ def full_hough_to_ply(dir):
         file.write(str(point[0]) + " " + str(point[1]) + " " + str(point[2]) + " " + str(int(point[3])) + " 0 " + str(int(255 - point[3])) + "\n")
 
 def main():
-  dir = os.path.join("..", "scratch", "vonroi_wulsd")
-  full_hough_to_ply(dir)
+  #dir = os.path.join("..", "scratch", "vonroi_wulsd")
+  #dir = os.path.join("..", "scratch", "full_persp_50mm_2.5m", "rows")
+  #full_hough_to_ply(dir)
 
-  cloud = o3d.io.read_point_cloud("point_cloud_test.ply")
+  cloud = o3d.io.read_point_cloud("point_cloud_1080_bam.ply")
+  #cloud = o3d.io.read_point_cloud("point_cloud_perspective_bam.ply")
   # normalize the colors
   colors = np.asarray(cloud.colors)
   max = np.max(colors[:, 2])

@@ -67,7 +67,8 @@ def perspective_hough_transform(images, f, dist):
   gradients_y = [cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=5) for image in images]
 
   # calculate the hough spaces for all images
-  hough_spaces = perspective_hough_transform_helper(images, edges, gradients_x, gradients_y, f, dist)
+  return perspective_hough_transform_helper(images, edges, gradients_x, gradients_y, f, dist)
+
 
 @jit(nopython=True)
 def perspective_hough_transform_helper(images, edges, gradients_x, gradients_y, f, dist):
@@ -88,19 +89,20 @@ def perspective_hough_transform_helper(images, edges, gradients_x, gradients_y, 
     hough_spaces_h2 = [np.zeros((x_center, num_rotations)) for _ in range(height)]
 
     for y in range(height):
-      for x in range(1, width - 1):
+      #for x in range(1, width - 1):
         for theta in range(1, num_rotations):
           for amplitude in range(1, x_center):
             temp = 1 + (amplitude / dist) * np.cos(theta)
             if temp == 0:
               continue
             proj_x = (-f * (amplitude/dist) * np.sin(theta)) / temp
-            proj_x = int(proj_x)
+            proj_x = int(proj_x) + x_center
             proj_y = (f * (y/dist)) / temp
             proj_y = int(proj_y)
-            if proj_x < 0 or proj_x >= width or proj_y < 0 or proj_y >= height:
+            if proj_x < 0 or proj_x >= width or proj_y < 0 or proj_y >= num_rotations:
+              #print("proj_x: ", proj_x, "proj_y: ", proj_y)
               continue
-            if edges[y][proj_x, proj_y] > 0:
+            if edges[y][proj_y, proj_x] > 0:
               hough_spaces_h1[y][amplitude, theta] += 1
 
             
@@ -130,8 +132,8 @@ def perspective_hough_transform_helper(images, edges, gradients_x, gradients_y, 
     return
 
 def post_process_hough_space(hough_space_h1, hough_space_h2):
-    hough_space_h1 = hough_space_h1 + hough_space_h2
-    hough_space_h2 = hough_space_h1
+    #hough_space_h1 = hough_space_h1 + hough_space_h2
+    hough_space_h2 = hough_space_h1 + hough_space_h2
 
     sum_h1 = np.sum(hough_space_h1)
     sum_h2 = np.sum(hough_space_h2)
@@ -156,7 +158,7 @@ def post_process_hough_space(hough_space_h1, hough_space_h2):
     mask1 = np.zeros((rows, cols), np.uint8)
     mask2 = np.zeros((rows, cols), np.uint8)
     #r1 = 50
-    #r2 = 100
+    #r2 = 50
     center = [crow, ccol]
     x, y = np.ogrid[:rows, :cols]
     mask_area_1 = (x - center[0]) ** 2 + (y - center[1]) ** 2 <= r1**2
@@ -175,6 +177,8 @@ def post_process_hough_space(hough_space_h1, hough_space_h2):
 
     hough_space_h1 = hough_space_h1 - img_back_h1
     hough_space_h2 = hough_space_h2 - img_back_h2
+
+   
 
     # clip all values below 0 to 0
     hough_space_h1[hough_space_h1 < 0] = 0
@@ -220,6 +224,9 @@ def post_process_hough_space(hough_space_h1, hough_space_h2):
 
     gradient_h1 = gradient_h1 * 255
     gradient_h2 = gradient_h2 * 255
+
+    #return hough_space_h1, hough_space_h2
+    #return gradient_h1, gradient_h2
 
     #gradient_h1[gradient_h1 < 10] = 0
     #gradient_h2[gradient_h2 < 10] = 0
@@ -751,7 +758,7 @@ def main():
     plt.show()
 
 
-  if False: # compare 3 images
+  if True: # compare 3 images
     # get 3 random integers between 120 and 980
     imgs_indices = np.random.randint(120, 980, 3)
     imgs = [cv2.imread(os.path.join("..", "scratch", "vonroi_wulsd", str(i) + ".png"), 0) for i in imgs_indices]
@@ -858,12 +865,12 @@ def main():
     ax.scatter(x, y, z, c=c, cmap='jet', alpha=1)
     plt.show()
 
-  if True: # ply file creation
+  if False: # ply file creation
     #dir = os.path.join("..", "scratch", "full_persp_50mm_2.5m", "rows")
     dir = os.path.join("..", "scratch", "vonroi_wulsd")
     full_hough_to_ply(dir)
   
-  if True: # 3d Model Plotting
+  if False: # 3d Model Plotting
     #cloud = o3d.io.read_point_cloud("point_cloud_1080.ply")
     cloud = o3d.io.read_point_cloud("point_cloud_test.ply")
     # normalize the colors
@@ -887,14 +894,36 @@ def main():
     colors = cmap(colors[:, 2])[:, :3]
     cloud.colors = o3d.utility.Vector3dVector(colors)
 
-
-    
-
-
-    
-
     # Get the certainty values from the point cloud
     pcd = o3d.visualization.draw_geometries([cloud])
+
+  if False: # perspective test
+    dir = os.path.join("..", "scratch", "full_persp_50mm_2.5m", "rows")
+    images = [cv2.imread(os.path.join(dir, image), 0) for image in os.listdir(dir)]
+    images = images[200:800:3]
+    
+    hough_spaces_h1, hough_spaces_h2 = perspective_hough_transform(images, 50, 250)
+    #hough_spaces_h1, hough_spaces_h2 = perspective_hough_transform(images, 0.9375, 46.875)
+
+    plt.imshow(hough_spaces_h1[0], cmap='jet')
+    plt.colorbar()
+    plt.show()
+
+    fig, ax = plt.subplots(2, 5)
+    for i in range(30, 35):
+      ax[0, i-30].imshow(hough_spaces_h1[i], cmap='jet')
+      ax[1, i-30].imshow(hough_spaces_h2[i], cmap='jet')
+    plt.show()
+    
+
+
+
+    
+
+
+    
+
+    
 
 
     
