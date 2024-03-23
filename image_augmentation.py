@@ -242,7 +242,8 @@ def stitch_slice_diffs(img, horizontal=False):
 
 
 def main():
-  dir = os.path.join("..", "scratch", "full_persp_50mm_2.5m")
+  #dir = os.path.join("..", "scratch", "full_persp_50mm_2.5m")
+  dir = os.path.join("..", "rendered_scratch", "1440_persp_100mm_10mm")
   combine_imgs2(dir)
 
   #img = combine_slices(dir)
