@@ -1,0 +1,18 @@
+{
+    "Source": {
+        "id": "ORYX_RGB_1",
+        "capture_pixel_format": "BAYER_RG_16",
+        "retry_count": 10,
+        "bit_depth": "BIT_12"
+    },
+    "ImageProcessors": [
+        {
+            "processor": "ExrWriter",
+            "path_prefix": "/graphics/scratch2/students/siemssen/camera_images/camera_test",
+            "compression": "PIZ",
+            "pixel_type": "FLOAT",
+            "name": "Writer"
+        }
+    ]
+}
+

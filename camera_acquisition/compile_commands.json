@@ -1,0 +1,8 @@
+[
+{
+  "directory": "/graphics/scratch2/students/siemssen/BA_Specular_Scanning/camera_acquisition/build",
+  "command": "/usr/bin/c++ -DFMT_LOCALE -DFMT_SHARED -DJSON_DIAGNOSTICS=0 -DJSON_USE_IMPLICIT_CONVERSIONS=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -isystem /home/siemssen/.local/include -isystem /home/siemssen/Documents/code_public -isystem /home/siemssen/Documents/code_public/ibrapp/baseExt -isystem /graphics/opt/opt_Ubuntu22.04/json/include -isystem /opt/spinnaker/include -isystem /usr/include/OpenEXR -isystem /usr/include/x86_64-linux-gnu/qt5 -isystem /usr/include/x86_64-linux-gnu/qt5/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt5/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt5/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt5/QtGui -O3 -DNDEBUG -std=gnu++20 -Wall -Wextra -Wshadow -Wnon-virtual-dtor -Wold-style-cast -Wcast-align -Wunused -Woverloaded-virtual -Wpedantic -Wconversion -Wsign-conversion -Wnull-dereference -Wdouble-promotion -Wformat=2 -Wmisleading-indentation -Wduplicated-cond -Wduplicated-branches -Wlogical-op -Wuseless-cast -fopenmp -fPIC -o CMakeFiles/test.dir/test.cpp.o -c /graphics/scratch2/students/siemssen/BA_Specular_Scanning/camera_acquisition/test.cpp",
+  "file": "/graphics/scratch2/students/siemssen/BA_Specular_Scanning/camera_acquisition/test.cpp",
+  "output": "CMakeFiles/test.dir/test.cpp.o"
+}
+]
