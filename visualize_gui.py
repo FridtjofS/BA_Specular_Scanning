@@ -1,6 +1,6 @@
 import sys
 from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QSlider, QGridLayout
-from PyQt6.QtWidgets import QLabel, QPushButton, QCheckBox, QComboBox, QFileDialog
+from PyQt6.QtWidgets import QLabel, QPushButton, QCheckBox, QComboBox, QFileDialog, QButtonGroup, QSpinBox
 from PyQt6 import QtGui, QtCore
 import open3d as o3d
 import win32gui
@@ -65,11 +65,68 @@ class PointCloudViewer(QMainWindow):
     self.viewer = o3d.visualization.Visualizer()
     self.viewer.create_window()
     self.viewer.add_geometry(self.cloud)
+    # show backsides of the triangles
+    #self.viewer.get_render_option().mesh_show_back_face = True
 
     hwnd = win32gui.FindWindowEx(0,0,None, "Open3D")
     self.window = QtGui.QWindow.fromWinId(hwnd)
     self.windowContainer = self.createWindowContainer(self.window, self)
     self.layout.addWidget(self.windowContainer, 0, 0)
+
+    # load in the obj to compare to
+    self.obj = o3d.io.read_triangle_mesh("big_bunny.obj")
+    # scale the obj to the same size as the point cloud
+    # get the minimum and maximum y values of the point cloud
+    min_y = 1080 - 1047
+    max_y = 1080 - 59
+    # get the minimum and maximum y values of the obj   
+    min_y_obj = np.min(np.asarray(self.obj.vertices)[:, 1])
+    max_y_obj = np.max(np.asarray(self.obj.vertices)[:, 1])
+    # scale the obj to the same size as the point cloud
+    self.obj.scale((max_y - min_y) / (max_y_obj - min_y_obj), center=self.obj.get_center())
+    
+    # the center of the point cloud lies at half of the maximum y value
+    self.obj.translate((15, 418, 7))
+
+    self.obj.compute_vertex_normals()
+    self.obj.compute_triangle_normals()
+
+    # display image of the origin
+    # image name is in the same directory as the point cloud, the file 0001.png
+    img_name = os.path.join(os.path.dirname(self.cloud_name), "0001.png")
+
+    self.origin_img = QLabel()
+    self.origin_img.setPixmap(QtGui.QPixmap(img_name).scaledToWidth(350))
+
+    self.right_layout.addWidget(self.origin_img)
+
+    self.calculate_distances()
+
+    # radio button for either certainties or distances
+    self.cd_btn_group = QButtonGroup()
+    self.cd_btn_group.setExclusive(True)
+    self.certainties_btn = QCheckBox("Certainties")
+    self.certainties_btn.stateChanged.connect(self.update_point_count)
+    self.distances_btn = QCheckBox("Distances")
+    #self.distances_btn.stateChanged.connect(self.update_point_count)
+    self.cd_btn_group.addButton(self.certainties_btn)
+    self.cd_btn_group.addButton(self.distances_btn)
+    self.certainties_btn.setChecked(True)
+    self.right_layout.addWidget(self.certainties_btn)
+    self.right_layout.addWidget(self.distances_btn)
+
+    self.max_distance = QLabel(f"Max Distance: {np.max(self.distances):.2f}")
+    self.right_layout.addWidget(self.max_distance)
+    self.min_distance = QLabel(f"Min Distance: {np.min(self.distances):.2f}")
+    self.right_layout.addWidget(self.min_distance)
+    self.mean_error = QLabel(f"Mean Distance: {np.mean(self.distances):.2f}")
+    self.right_layout.addWidget(self.mean_error)
+    self.point_count = QLabel(f"Point Count: {len(self.points)}")   
+    self.right_layout.addWidget(self.point_count)
+
+    self.show_origin = QCheckBox("Show Origin")
+    self.show_origin.stateChanged.connect(self.show_origin_obj)
+    self.right_layout.addWidget(self.show_origin)
 
     # Outlier removal button
     outlier_widget = QWidget(self)
@@ -144,6 +201,28 @@ class PointCloudViewer(QMainWindow):
 
     self.showMaximized()
 
+  def show_origin_obj(self):
+    if self.show_origin.isChecked():
+        self.viewer.add_geometry(self.obj)
+    else:
+        self.viewer.remove_geometry(self.obj)
+    self.update_vis()
+
+
+  def calculate_distances(self):
+        # mouse loading symbol
+        self.setCursor(QtCore.Qt.CursorShape.WaitCursor)
+
+        # calculates the distances from each point to the nearest point in the obj
+        self.distances = np.zeros(len(self.points))
+        kd_tree = o3d.geometry.KDTreeFlann(self.obj)
+
+        for i, point in enumerate(self.points):
+            [_, idx, _] = kd_tree.search_knn_vector_3d(point, 1)
+            self.distances[i] = np.linalg.norm(point - np.asarray(self.obj.vertices)[idx[0]])
+
+        
+
   def open_file_dialog(self):
       file = QFileDialog.getOpenFileName(self, "Open Point Cloud", "", "Point Cloud Files (*.ply *.pcd *.xyz *.obj *.stl)")
       file = file[0]
@@ -166,8 +245,6 @@ class PointCloudViewer(QMainWindow):
             else:
                 o3d.io.write_point_cloud(file, self.cloud)
 
-
-
   def update_point_count(self):
 
       # using the certainties, we threshold the points
@@ -175,10 +252,23 @@ class PointCloudViewer(QMainWindow):
       certainties = self.certainties.copy()
       certainties[certainties < threshold] = 0
       certainties[certainties >= threshold] = 1
+      
 
+      self.max_distance.setText(f"Max Distance: {np.max(self.distances[certainties == 1]):.2f}")
+      self.mean_error.setText(f"Mean Distance: {np.mean(self.distances[certainties == 1]):.2f}")
+      self.min_distance.setText(f"Min Distance: {np.min(self.distances[certainties == 1]):.2f}")
+      self.point_count.setText(f"Point Count: {int(np.sum(certainties))}")
 
       points = self.points * certainties[:, None]
-      colors = self.colors * certainties[:, None]
+      if self.certainties_btn.isChecked():
+          colors = self.colors * certainties[:, None]
+      else:
+          distances = self.distances * certainties
+          # normalize the distances
+          distances = 1 - ((distances - np.min(distances)) / (np.max(distances) - np.min(distances)))
+          colors = self.cmap(distances)[:, :3]
+
+
       # update the points
       self.cloud.points = (o3d.utility.Vector3dVector(points))
       self.cloud.colors = (o3d.utility.Vector3dVector(colors))
@@ -222,6 +312,8 @@ class PointCloudViewer(QMainWindow):
 
       self.points = self.points[ind]
       self.colors = self.colors[ind]
+      self.certainties = self.certainties[ind]
+      self.distances = self.distances[ind]
 
       self.cloud.colors = o3d.utility.Vector3dVector(self.colors)
       self.cloud.points = o3d.utility.Vector3dVector(self.points)
@@ -231,21 +323,71 @@ class PointCloudViewer(QMainWindow):
       self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
 
   def estimate_normals(self):
-      # set the original normals to facing out from the centerpoint
-      centerx = np.mean(self.points[:, 0])
-      centery = np.mean(self.points[:, 1])
-      centerz = np.mean(self.points[:, 2])
+      # mouse loading symbol
+      self.setCursor(QtCore.Qt.CursorShape.WaitCursor)
 
-      self.cloud.normals = o3d.utility.Vector3dVector(self.points - np.array([centerx, centery, centerz]))
-      self.cloud.normals = o3d.utility.Vector3dVector(np.asarray(self.cloud.normals) / np.linalg.norm(np.asarray(self.cloud.normals), axis=1)[:, None])
+      # estimate normals based upon the weight of the neighbouring points, pointing in the other direction
+      
+      # go through the points and get the neighbouring points
+
+      # create empty normals
+      self.cloud.normals = o3d.utility.Vector3dVector(np.zeros_like(self.points))
+
+      # create a KDTree
+      kd_tree = o3d.geometry.KDTreeFlann(self.cloud)
+      # get the indices of the nearest neighbours
+      for i, point in enumerate(self.points):
+            
+        [_, idx, _] = kd_tree.search_radius_vector_3d(point, 200)
+
+
+        nn_points = np.asarray(self.points)[idx]
+        # check if nan is in the points
+        if np.isnan(nn_points).any():
+            print("Nan in points")
+            continue
+
+        nn_dists = np.linalg.norm(nn_points - point, axis=1)
+        # normalize the distances
+        nn_dists = 1 - ((nn_dists - np.min(nn_dists)) / (np.max(nn_dists) - np.min(nn_dists)))
+
+        
+
+        # create a weighted average
+        avg = np.average(nn_points, axis=0, weights=nn_dists)
+
+        # set the normal to the difference between the point and the average
+        inverse_normal = point - avg
+        # normalize the normal
+        inverse_normal = inverse_normal / np.linalg.norm(inverse_normal)
+        # inverse the normal
+        normal = inverse_normal
+
+        self.cloud.normals[i] = normal
+
+
       # normalize the normals
       self.cloud.normals = o3d.utility.Vector3dVector(np.asarray(self.cloud.normals) / np.linalg.norm(np.asarray(self.cloud.normals), axis=1)[:, None])
 
 
+      # set the original normals to facing out from the centerpoint
+      #centerx = np.mean(self.points[:, 0])
+      #centery = np.mean(self.points[:, 1])
+      #centerz = np.mean(self.points[:, 2])
+#
+      #self.cloud.normals = o3d.utility.Vector3dVector(self.points - np.array([centerx, centery, centerz]))
+      #self.cloud.normals = o3d.utility.Vector3dVector(np.asarray(self.cloud.normals) / np.linalg.norm(np.asarray(self.cloud.normals), axis=1)[:, None])
+      ## normalize the normals
+      #self.cloud.normals = o3d.utility.Vector3dVector(np.asarray(self.cloud.normals) / np.linalg.norm(np.asarray(self.cloud.normals), axis=1)[:, None])
+#
+#
       self.cloud.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=100, max_nn=30))
       self.viewer.update_geometry(self.cloud)
       self.viewer.get_render_option().point_show_normal = True
       self.update_vis()
+
+      # reset the cursor
+      self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
 
   def estimate_mesh(self):
       # mouse loading symbol
@@ -265,6 +407,13 @@ class PointCloudViewer(QMainWindow):
 
   def reset(self):
       self.cloud_name = self.cloud_name_btn.text()
+
+      # set image to origin
+      img_name = os.path.join(os.path.dirname(self.cloud_name), "0001.png")
+      self.origin_img.setPixmap(QtGui.QPixmap(img_name).scaledToWidth(350))
+
+
+
       self.cloud = o3d.io.read_point_cloud(self.cloud_name)
       self.colors = np.asarray(self.cloud.colors).copy()
       self.points = np.asarray(self.cloud.points).copy()
@@ -272,14 +421,18 @@ class PointCloudViewer(QMainWindow):
       self.certainties = (self.certainties - np.min(self.certainties)) / (np.max(self.certainties) - np.min(self.certainties))
       self.colors = self.cmap(self.colors[:, 0])[:, :3]
       self.cloud.colors = o3d.utility.Vector3dVector(self.colors)
-      #self.cloud.normals = None
+      self.calculate_distances()
       self.slider.setValue(0)
+      self.update_point_count()
+      #self.cloud.normals = None
       self.viewer.clear_geometries()
       self.viewer.add_geometry(self.cloud)
+      #self.viewer.add_geometry(self.obj)
       self.viewer.update_geometry()
       self.viewer.get_render_option().point_show_normal = False
+      self.show_origin.setChecked(False)
       self.update_vis()    
-
+      
   def update_vis(self):
       #self.viewer.update_geometry()
       self.viewer.poll_events()
@@ -296,6 +449,6 @@ if __name__ == "__main__":
   app = QApplication(sys.argv)
 
   # Create the GUI window
-  window = PointCloudViewer("big_bunny.obj")#("point_cloud_1080_bam.ply")
+  window = PointCloudViewer("..\scratch\marble_100mm_10mm\point_cloud_marble_100mm_10mm.ply")
   window.show()
   sys.exit(app.exec())

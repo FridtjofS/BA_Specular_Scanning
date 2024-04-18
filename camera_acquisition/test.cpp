@@ -28,7 +28,7 @@ int main() {
 
   Pipeline pipeline("/graphics/scratch2/students/siemssen/BA_Specular_Scanning/camera_acquisition/pipeline.json");
                                   
-  Turntable turntable("/dev/ttyUSB0");
+  Turntable turntable("/dev/ttyUSB1");
   turntable.setAcceleration(acceleration);
 
  // ls.arc->init();

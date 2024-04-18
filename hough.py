@@ -285,7 +285,7 @@ def full_hough_to_ply(dir):
     z_max = len(frame_names)
     # sort the frames named 0.png, 1.png, ..., 100.png, ...
     frame_names.sort(key=lambda x: int(str(os.path.basename(str(x))).split('.')[0]))
-    #frame_names = frame_names[::20]
+    #frame_names = frame_names[::100]
     frames = [cv2.imread(os.path.join(dir, frame), 0) for frame in frame_names]
     
     #frames = frames[::20]
@@ -309,8 +309,11 @@ def full_hough_to_ply(dir):
 
     #points_coordinates = smooth_point_cloud(points_coordinates)    
 
+    filename = os.path.split(os.path.split(os.path.normpath(dir))[0])[-1]
+    filename = os.path.join(os.path.split(os.path.normpath(dir))[0], "point_cloud_" + filename + ".ply")
+
     # write the points to a ply file
-    with open("point_cloud_test.ply", "w") as file:
+    with open(filename, "w") as file:
       file.write("ply\n")
       file.write("format ascii 1.0\n")
       file.write("element vertex " + str(len(points_coordinates)) + "\n")
@@ -322,7 +325,7 @@ def full_hough_to_ply(dir):
       file.write("property uint8 blue\n")
       file.write("end_header\n")
       for point in points_coordinates:
-        file.write(str(point[0]) + " " + str(point[1]) + " " + str(point[2]) + " " + str(int(point[3])) + " 0 " + str(int(255 - point[3])) + "\n")
+        file.write(str(point[2]) + " " + str(point[0]) + " " + str(point[1]) + " " + str(int(point[3])) + " 0 " + str(int(255 - point[3])) + "\n")
 
 def smooth_point_cloud(points):
     return points
@@ -360,6 +363,19 @@ def smooth_point_cloud(points):
 
 
 def main():
+
+  if False: # rewrite ply from zxy to xyz
+    filename = "..\scratch\marble_100mm_10mm\point_cloud_marble_100mm_10mm.ply"
+    with open(filename, "r") as file:
+      lines = file.readlines()
+      with open(filename, "w") as file:
+        for i, line in enumerate(lines):
+          if i < 10:
+            file.write(line)
+          else:
+            z, x, y, r, g, b = line.split(" ")
+            file.write(x + " " + y + " " + z + " " + r + " " + g + " " + b)
+
 
   if False: # curve Fitting Test
     # get 3 random integers between 120 and 980
@@ -502,6 +518,9 @@ def main():
 
     # plot the hough spaces in a 2x3 grid
     fig, ax = plt.subplots(2, 3)
+    hough_space_1[hough_space_1 > 0] = 1
+    hough_space_2[hough_space_2 > 0] = 1
+    hough_space_3[hough_space_3 > 0] = 1
     ax[0, 0].imshow(hough_space_1, cmap='jet')
     ax[0, 1].imshow(hough_space_2, cmap='jet')
     ax[0, 2].imshow(hough_space_3, cmap='jet')
@@ -581,13 +600,15 @@ def main():
     
 
 
-  if True:
+  if False:
     #dir = os.path.join("..", "scratch", "vonroi_wulsd")
-    dir = os.path.join("..", "scratch", "copper_bg_100mm_10mm", "rows")
+    dir = os.path.join("..", "scratch", "marble_100mm_10mm", "rows")
     #dir = os.path.join("..", "rendered_scratch", "1440_persp_100mm_10mm", "rows")
-    #full_hough_to_ply(dir)
+    full_hough_to_ply(dir)
+    filename = os.path.split(os.path.split(os.path.normpath(dir))[0])[-1]
+    filename = os.path.join(os.path.split(os.path.normpath(dir))[0], "point_cloud_" + filename + ".ply")
 
-    cloud = o3d.io.read_point_cloud("point_cloud_test.ply")
+    cloud = o3d.io.read_point_cloud(filename)
     #cloud = o3d.io.read_point_cloud("point_cloud_1080_bam.ply")
     #cloud = o3d.io.read_point_cloud("point_cloud_perspective_100mm.ply")
     # normalize the colors
