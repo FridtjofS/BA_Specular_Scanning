@@ -1,1 +1,3 @@
 rendered/
+/assets
+*.pyc

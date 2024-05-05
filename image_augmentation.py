@@ -31,8 +31,32 @@ def combine_imgs2(dir):
     img = imageio.imread(files[0])
     row_count = img.shape[0]
     result = np.zeros([row_count, img_count, img.shape[1], img.shape[2]], dtype=img.dtype)
+
+    # get degree 0 and 180 images
+    img0 = Image.open(files[0])
+    img180 = Image.open(files[len(files) // 2])
+
+    angle, x_center = get_angle_and_xcenter(img0, img180, 100)
+    offset = img.shape[1] // 2 - x_center
+    if angle is None or x_center is None:
+      print("Could not get angle and x_center")
+      return
+    print(f"Angle: {angle}, x_center: {x_center}")
+
+
     for i, img_path in tqdm(enumerate(files)):
         img = imageio.imread(img_path)
+        #if offset != 0:
+            # shift the image
+        #    img = np.roll(img, offset, axis=1)
+        # rotate the image
+        #img = cv2.warpAffine(img, cv2.getRotationMatrix2D((img.shape[1] // 2, img.shape[0] // 2), angle, 1), (img.shape[1], img.shape[0]))
+
+        #plt.imshow(img)
+        #plt.show()
+        #return
+
+
         for row in range(row_count):
                 result[row, i] = img[row]
 
@@ -40,6 +64,78 @@ def combine_imgs2(dir):
         imageio.imwrite(os.path.join(dir,"rows",f"{i}.png"), row_img)
 
 
+def cut_imgs(dir, cutoff_x, cutoff_y):
+    files = [os.path.join(dir,f) for f in os.listdir(dir) if f.endswith(".png")]
+    height, width = imageio.imread(files[0]).shape[:2]
+    
+    for i, img_path in tqdm(enumerate(files)):
+        img = imageio.imread(img_path)
+        img = img[cutoff_y:height - cutoff_y, cutoff_x : width - cutoff_x]
+        imageio.imwrite(os.path.join(dir,"cropped",f"{i}.png"), img)
+
+
+
+def combine_imgs_vertical(dir):
+    # stacks the coluns of the images from left to right
+    files = [os.path.join(dir,f) for f in os.listdir(dir) if f.endswith(".png")]
+    files = sorted(files)
+    #print(files)
+
+    img_count = len(files)
+    img = imageio.imread(files[0])
+    col_count = img.shape[1]
+    result = np.zeros([img.shape[1], img.shape[0], img_count, img.shape[2]], dtype=img.dtype)
+
+    for i, img_path in tqdm(enumerate(files)):
+        img = imageio.imread(img_path)
+        for col in range(col_count):
+                result[col, :, i] = img[:, col]
+                
+        
+
+    for i, col_img in tqdm(enumerate(result)):
+        imageio.imwrite(os.path.join(dir,"cols",f"{i}.png"), col_img)
+
+
+
+
+
+def get_angle_and_xcenter(img0, img180, threshold):
+  # get leftmost point in img0 and rightmost point in img180
+  # get the angle between the two points and the center of the image
+  width, height = img0.size
+
+  # use edge detection to get the leftmost and rightmost points
+  img0 = cv2.Canny(np.array(img0), threshold, threshold * 3)
+  img180 = cv2.Canny(np.array(img180), threshold, threshold * 3)
+
+  leftmost = None
+  rightmost = None
+  for x in range(width):
+    for y in range(height):
+      if img0[y, x] > 0:
+        leftmost = (x, y)
+        break
+    if leftmost is not None:
+      break
+  for x in range(width - 1, -1, -1):
+    for y in range(height):
+      if img180[y, x] > 0:
+        rightmost = (x, y)
+        break
+    if rightmost is not None:
+      break
+
+  if leftmost is None or rightmost is None:
+    return None, None
+  
+  # get the center of the image
+  x_center = leftmost[0] + (rightmost[0] - leftmost[0]) // 2
+
+  # get the angle between the two points
+  angle = np.arctan2(rightmost[1] - leftmost[1], rightmost[0] - leftmost[0]) * 180 / np.pi
+
+  return angle, x_center
 
 
 
@@ -242,9 +338,10 @@ def stitch_slice_diffs(img, horizontal=False):
 
 
 def main():
-  dir = os.path.join("..", "scratch", "marble_100mm_10mm")
+  dir = os.path.join("..", "scratch", "diagonal_angle")
   #dir = os.path.join("..", "rendered_scratch", "1440_persp_100mm_10mm")
-  combine_imgs2(dir)
+  #combine_imgs_vertical(dir)
+  cut_imgs(dir, 500, 0)
 
   #img = combine_slices(dir)
   #img.show()
