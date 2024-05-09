@@ -9,6 +9,7 @@ from tqdm.auto import tqdm
 import skimage as sk
 import open3d as o3d
 import random
+import time
 
 def full_hough_to_ply(dir):
   ellipse_ratio = 0.258
@@ -458,40 +459,16 @@ def post_process_hough_3d(hough_spaces):
 
   print("Removing low frequencies...")
 
-  
-  ## convolution with a gaussian kernel
-  #def gaussian_kernel(size, sigma=1):
-  #  #size = int(size) // 2
-  #  kernel = np.zeros((size * 2, size * 2, size * 2))
-  #  for x in range(-size, size):
-  #    for y in range(-size, size):
-  #      for z in range(-size, size):
-  #        kernel[x + size, y + size, z + size] = np.exp(-(x**2 + y**2 + z**2) / (2 * sigma**2))
-  #  return kernel / (2 * np.pi * sigma**2)
-  #
-  #
-  #kernel_size = 5
-  #kernel3d = gaussian_kernel(kernel_size, sigma=1)
-  #
-  #print("Convolving with gaussian kernel...")
-  #hough_spaces = np.convolve(hough_spaces, kernel3d)
-  
-#
-  #
-  #hough_spaces_conv = np.zeros(hough_spaces.shape)
-#
-  ##hough_spaces_conv = hough_spaces
-  #for i in range(hough_spaces.shape[0]):
-  #  for j in range(hough_spaces.shape[1]):
-  #    for k in range(hough_spaces.shape[2]):
-  #      if i < 5 or j < 5 or k < 5 or i >= hough_spaces.shape[0] - 5 or j >= hough_spaces.shape[1] - 5 or k >= hough_spaces.shape[2] - 5:
-  #        continue
-  #      hough_spaces_conv[i, j, k] = np.sum(hough_spaces[i - 5:i + 5, j - 5:j + 5, k - 5:k + 5] * kernel3d)
-  
+  start = time.time()
 
-  
-  
+  #hough_spaces_lowpass = sk.ndimage.gaussian_filter(hough_spaces, 5)
+  #hough_spaces = hough_spaces - hough_spaces_lowpass
+  #return hough_spaces
+
   hough_spaces_fourier = np.fft.fftn(hough_spaces)
+  time_elapsed = time.time() - start
+  print(f"Time elapsed: {time_elapsed}")
+
   print("Shifting the fourier transform...")
   hough_spaces_fourier = np.fft.fftshift(hough_spaces_fourier)
   print("Creating mask...")
@@ -509,13 +486,12 @@ def post_process_hough_3d(hough_spaces):
   f_ishift = np.fft.ifftshift(fshift)
   hough_spaces = hough_spaces - np.abs(np.fft.ifftn(f_ishift))
 
-
   # Weigh the matrix with weights e^(-0.001)*[1,2,...,A_max] along the amplitude axis
   print("Weighing the matrix...")
   for amplitude in range(1, hough_spaces.shape[1]):
     hough_spaces[:, amplitude, :] = hough_spaces[:, amplitude, :] * np.exp(-0.001 * amplitude)
 
-  
+  return hough_spaces
 
   hough_mask = hough_spaces.flatten()
   # normalize the mask
@@ -707,11 +683,12 @@ def hough_helper_sausage(grad_mag, hough_spaces, y, ellipse_ratio, threshold, ra
 
 def test_hough():
   # load the hough spaces from a file
-  hough_spaces = np.load("hough_spaces.npy")
+  hough_spaces = np.load("hough_spaces_60d_orth_voronoi_1440.npy")
 
   # only take every 5th frame
   #hough_spaces = hough_spaces[::4]
   print(hough_spaces.shape)
+
 
   hough_spaces = post_process_hough_3d(hough_spaces)
 
@@ -720,8 +697,6 @@ def test_hough():
   #    plt.imshow(hough_space, cmap='inferno')
   #    plt.colorbar()
   #    plt.show()
-#
-  #return
 
 
 
@@ -841,8 +816,8 @@ def main():
   #plt.imshow(test_img, cmap="gray")
   #plt.show()
 #
-  #test_hough()
-  #return
+  test_hough()
+  return
 
   #dir = os.path.join("..", "scratch", "diagonal_angle", "cropped")
   #dir = os.path.join("..", "scratch", "60d_100mm_10mm_voronoi", "rows")
