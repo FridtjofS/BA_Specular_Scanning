@@ -11,13 +11,15 @@ import open3d as o3d
 import random
 
 def full_hough_to_ply(dir):
-  ellipse_ratio = 0.5
-  threshold = 20
+  ellipse_ratio = 0.258
+  threshold = 40
 
   frame_names = os.listdir(dir)
   # sort the frames named 0.png, 1.png, ..., 100.png, ...
+  # filter out every frame thats not an int
+  frame_names = [frame for frame in frame_names if frame.split('.')[0].isdigit()]
   frame_names = sorted(frame_names, key=lambda x: int(x.split('.')[0]))
-  frame_names = frame_names[::10]
+  frame_names = frame_names[::4]
   frames = [cv2.imread(os.path.join(dir, frame), 0) for frame in frame_names if frame.endswith('.png')]
   theta_max = len(frames)
 
@@ -54,6 +56,7 @@ def full_hough_to_ply(dir):
       # normalize the gradient magnitude
       grad_mag = cv2.normalize(grad_mag, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
 
+
       # blur frame
       #grad_mag = cv2.GaussianBlur(frame, (5, 5), 0)
 #
@@ -81,8 +84,8 @@ def full_hough_to_ply(dir):
 
 
     # save the hough spaces to a file
-    #np.save("hough_spaces.npy", hough_spaces)
-    #return  
+    np.save("hough_spaces.npy", hough_spaces)
+    return  
 
     #hough_spaces = post_process_hough(hough_spaces)
     with tqdm(total=hough_spaces.shape[0], desc="Post processing hough spaces") as pbar:
@@ -327,9 +330,8 @@ def post_process_hough(hough_space):
 
 
   # normalize the matrix
-  hough_space = (hough_space - np.min(hough_space)) / (np.max(hough_space) - np.min(hough_space))
-
-  hough_space = hough_space * 255
+  #hough_space = (hough_space - np.min(hough_space)) / (np.max(hough_space) - np.min(hough_space))
+  #hough_space = hough_space * 255
 
   #return hough_space
   
@@ -337,10 +339,10 @@ def post_process_hough(hough_space):
   gradient_hough = np.abs(cv2.Sobel(hough_space, cv2.CV_64F, 0, 1, ksize=5))
 
   # normalize the gradient
-  if gradient_hough.max() > 0: 
-    gradient_hough = (gradient_hough - np.min(gradient_hough)) / (np.max(gradient_hough) - np.min(gradient_hough))
-
-  gradient_hough = gradient_hough * 255
+  #if gradient_hough.max() > 0: 
+  #  gradient_hough = (gradient_hough - np.min(gradient_hough)) / (np.max(gradient_hough) - np.min(gradient_hough))
+#
+  #gradient_hough = gradient_hough * 255
 
   t, _ = cv2.threshold(gradient_hough.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
   
@@ -451,15 +453,283 @@ def post_process_hough(hough_space):
   return hough_space
   
 
+#@jit(nopython=True, debug=True)
+def post_process_hough_3d(hough_spaces):
+
+  print("Removing low frequencies...")
+
+  
+  ## convolution with a gaussian kernel
+  #def gaussian_kernel(size, sigma=1):
+  #  #size = int(size) // 2
+  #  kernel = np.zeros((size * 2, size * 2, size * 2))
+  #  for x in range(-size, size):
+  #    for y in range(-size, size):
+  #      for z in range(-size, size):
+  #        kernel[x + size, y + size, z + size] = np.exp(-(x**2 + y**2 + z**2) / (2 * sigma**2))
+  #  return kernel / (2 * np.pi * sigma**2)
+  #
+  #
+  #kernel_size = 5
+  #kernel3d = gaussian_kernel(kernel_size, sigma=1)
+  #
+  #print("Convolving with gaussian kernel...")
+  #hough_spaces = np.convolve(hough_spaces, kernel3d)
+  
+#
+  #
+  #hough_spaces_conv = np.zeros(hough_spaces.shape)
+#
+  ##hough_spaces_conv = hough_spaces
+  #for i in range(hough_spaces.shape[0]):
+  #  for j in range(hough_spaces.shape[1]):
+  #    for k in range(hough_spaces.shape[2]):
+  #      if i < 5 or j < 5 or k < 5 or i >= hough_spaces.shape[0] - 5 or j >= hough_spaces.shape[1] - 5 or k >= hough_spaces.shape[2] - 5:
+  #        continue
+  #      hough_spaces_conv[i, j, k] = np.sum(hough_spaces[i - 5:i + 5, j - 5:j + 5, k - 5:k + 5] * kernel3d)
+  
+
+  
+  
+  hough_spaces_fourier = np.fft.fftn(hough_spaces)
+  print("Shifting the fourier transform...")
+  hough_spaces_fourier = np.fft.fftshift(hough_spaces_fourier)
+  print("Creating mask...")
+
+  radius = 10
+  rows, cols, depth = hough_spaces.shape
+  crow, ccol, cdep = rows // 2, cols // 2, depth // 2
+  mask = np.zeros((rows, cols, depth), np.uint8)
+  center = [crow, ccol, cdep]
+  x, y, z = np.ogrid[:rows, :cols, :depth]
+  mask_area = (x - center[0]) ** 2 + (y - center[1]) ** 2 + (z - center[2]) ** 2 <= radius**2
+  mask[mask_area] = 1
+  fshift = hough_spaces_fourier * mask
+
+  f_ishift = np.fft.ifftshift(fshift)
+  hough_spaces = hough_spaces - np.abs(np.fft.ifftn(f_ishift))
+
+
+  # Weigh the matrix with weights e^(-0.001)*[1,2,...,A_max] along the amplitude axis
+  print("Weighing the matrix...")
+  for amplitude in range(1, hough_spaces.shape[1]):
+    hough_spaces[:, amplitude, :] = hough_spaces[:, amplitude, :] * np.exp(-0.001 * amplitude)
+
+  
+
+  hough_mask = hough_spaces.flatten()
+  # normalize the mask
+  hough_mask = cv2.normalize(hough_mask.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+
+  t, _ = cv2.threshold(hough_mask.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
+  print(f"Threshold: {t}")
+  hough_mask = hough_mask.reshape(hough_spaces.shape)
+
+  hough_spaces[hough_mask <= t] = 0
+
+  # find local maximas
+  print("Finding local maximas...")
+  coordinates_hough = sk.feature.peak_local_max(hough_spaces, threshold_rel = 0.2, min_distance=3)
+
+  hough_mask = np.zeros(hough_spaces.shape)
+  hough_mask[coordinates_hough[:, 0], coordinates_hough[:, 1], coordinates_hough[:, 2]] = 1
+
+  hough_spaces = hough_spaces * hough_mask
+
+  #hough_spaces[hough_spaces <= t] = 0
+  return hough_spaces
+
+  # create 3d gradient magnitude
+  print("Calculating gradient magnitude...")
+  hough_gradient = np.gradient(hough_spaces)
+  hough_gradient = np.abs(hough_gradient)
+
+  # threshold the gradient magnitude
+  print("Thresholding the gradient magnitude...")
+  gradient_flat = hough_gradient.flatten()
+  # use otsu thresholding
+  t, _ = cv2.threshold(gradient_flat.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
+  hough_spaces[hough_gradient <= t] = 0
+
+  return hough_spaces
+
+
+def full_hough_to_ply_sausage(dir):
+  ellipse_ratio = 0.5
+  threshold = 40
+
+  frame_names = os.listdir(dir)
+  # sort the frames named 0.png, 1.png, ..., 100.png, ...
+    # filter out every frame thats not an int
+  frame_names = [frame for frame in frame_names if frame.split('.')[0].isdigit()]
+  frame_names = sorted(frame_names, key=lambda x: int(x.split('.')[0]))
+  z_total = len(frame_names)
+
+  #frame_names = frame_names[::4]
+  frames = [cv2.imread(os.path.join(dir, frame), 0) for frame in frame_names if frame.endswith('.png')]
+  frame = frames[0]
+  # get the frame size
+  theta_max, width = frame.shape
+  z_max = len(frames)
+  rad_max = width // 2
+
+  # hough spaces are per z slice the radius on one axis and the angle on the other axis
+  hough_spaces = np.zeros((z_total, rad_max, theta_max), dtype=np.uint32)
+
+  with tqdm(total=len(frames), desc="Processing frames") as pbar:
+    for i, frame in enumerate(frames):
+      if i == 0:
+        continue
+
+      # check if cv2 can read the frame
+      if frame is None:
+        continue
+
+      # get gradients in x and y direction
+      grad_x = cv2.Sobel(frame, cv2.CV_64F, 1, 0, ksize=5)
+      grad_y = cv2.Sobel(frame, cv2.CV_64F, 0, 1, ksize=5)
+
+      # get the gradient magnitude
+      grad_mag = np.sqrt(grad_x**2 + grad_y**2)
+
+      # normalize the gradient magnitude
+      grad_mag = cv2.normalize(grad_mag, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+      #plt.imshow(grad_mag, cmap='gray')
+      #plt.show()
+
+      y = i / z_max * z_total
+
+      hough_spaces = hough_helper_sausage(grad_mag, hough_spaces, y, ellipse_ratio, threshold, rad_max, z_total, theta_max, width)
+
+      pbar.update(1)
+
+    # save the hough spaces to a file
+    np.save("hough_spaces_sausage.npy", hough_spaces)
+    #return
+
+    with tqdm(total=hough_spaces.shape[0], desc="Post processing hough spaces") as pbar:
+      for i, hough_space in enumerate(hough_spaces):  
+        #plt.imshow(hough_spaces[i], cmap='jet')
+        #plt.show()
+        hough_spaces[i] = post_process_hough(hough_space)
+        pbar.update(1)
+
+    # convert extrema to 3D points
+    points = []
+    colors = []
+
+    # get the extrema
+    extrema = np.argwhere(hough_spaces > 0)
+    with tqdm(total=len(extrema), desc="Converting extrema to 3D points") as pbar:
+      for z, a, theta_base  in extrema:
+        theta = (theta_base / hough_spaces.shape[2]) * 2 * np.pi
+        # get the x and y values
+        x = a * np.cos(theta)
+        y = a * np.sin(theta)
+        points.append([x, y, z])
+        colors.append([hough_spaces[z, a, theta_base], 0, 0])
+        pbar.update(1)
+
+    # normalize the colors
+    colors = np.array(colors)
+    colors = colors / np.max(colors)
+
+    #colors[:, 2] = 1 - colors[:, 0]
+
+    color_vals = colors[:, 0]
+
+    cmap = plt.get_cmap('inferno')
+    colors = cmap(color_vals)[:, :3]
+
+    # create a point cloud
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+    pcd.colors = o3d.utility.Vector3dVector(colors)
+
+    o3d.visualization.draw_geometries([pcd])
+
+    colors *= 255
+    colors = colors.astype(np.uint8)
+
+    # write the points to a ply file
+    with open("test_arbitrary_angle_sausage.ply", "w") as file:
+      file.write("ply\n")
+      file.write("format ascii 1.0\n")
+      file.write("element vertex " + str(len(points)) + "\n")
+      file.write("property float32 x\n")
+      file.write("property float32 y\n")
+      file.write("property float32 z\n")
+      file.write("property uint8 red\n")
+      file.write("property uint8 green\n")
+      file.write("property uint8 blue\n")
+      file.write("end_header\n")
+      for i, point in enumerate(points):
+        file.write(str(float(point[1])) + " " + str(float(point[2])) + " " + str(float(point[0])) + " " + str(colors[i][0]) + " " + str(colors[i][1]) + " " + str(colors[i][2]) + "\n")
+  
+
+@jit(nopython=True)
+def hough_helper_sausage(grad_mag, hough_spaces, y, ellipse_ratio, threshold, rad_max, z_total, theta_max, width):
+  # get points where the gradient magnitude is above a threshold
+  points = np.argwhere(grad_mag > threshold)
+  
+  for theta_base, x in points:
+    theta = (theta_base / theta_max) * 2 * np.pi if theta_base != 0 else 0
+
+    # loop over all possible radii
+    for a in range(np.abs(rad_max - x), rad_max):
+      if a == 0:
+        continue
+
+      b = a * ellipse_ratio
+
+      x_rel = x - rad_max
+      y_rel = (b * np.sqrt(a**2 - x_rel**2)) / a
+
+      z0 = int(y - y_rel)
+      z1 = int(y + y_rel)
+
+      y_im = np.sqrt(a**2 - x_rel**2) if a != x_rel else 0
+
+      # get the theta values for the ellipses
+      theta0 = int(((np.pi + math.atan2(x_rel, y_im) - theta) % (2 * np.pi))  / (2 * np.pi) * (theta_max)) % theta_max
+      theta1 = int(((np.pi + math.atan2(x_rel, -y_im) - theta) % (2 * np.pi)) / (2 * np.pi) * (theta_max)) % theta_max
+
+      if z0 >= 0 and z0 < z_total:
+        hough_spaces[z0, a, theta0] += 1
+      if z1 >= 0 and z1 < z_total and z1 != z0:
+        hough_spaces[z0, a, theta1] += 1
+
+  return hough_spaces
+  
+  
+
+
+
 def test_hough():
   # load the hough spaces from a file
   hough_spaces = np.load("hough_spaces.npy")
 
+  # only take every 5th frame
+  #hough_spaces = hough_spaces[::4]
+  print(hough_spaces.shape)
+
+  hough_spaces = post_process_hough_3d(hough_spaces)
+
+  #for i, hough_space in enumerate(hough_spaces):
+  #  if i % 5 == 0:
+  #    plt.imshow(hough_space, cmap='inferno')
+  #    plt.colorbar()
+  #    plt.show()
+#
+  #return
+
+
+
   # post process the hough spaces
-  with tqdm(total=hough_spaces.shape[0], desc="Post processing hough spaces") as pbar:
-    for i, hough_space in enumerate(hough_spaces):  
-      hough_spaces[i] = post_process_hough(hough_space)
-      pbar.update(1)
+  #with tqdm(total=hough_spaces.shape[0], desc="Post processing hough spaces") as pbar:
+  #  for i, hough_space in enumerate(hough_spaces):  
+  #    hough_spaces[i] = post_process_hough(hough_space)
+  #    pbar.update(1)
 
   # convert extrema to 3D points
   points = []
@@ -470,13 +740,25 @@ def test_hough():
   with tqdm(total=len(extrema), desc="Converting extrema to 3D points") as pbar:
     for theta_base, a, z  in extrema:
       theta = (theta_base / hough_spaces.shape[0]) * 2 * np.pi
-
       # get the x and y values
       x = a * np.cos(theta)
       y = a * np.sin(theta)
       points.append([x, y, z])
       colors.append([hough_spaces[theta_base, a, z], 0, 0])
       pbar.update(1)
+
+  # get the extrema
+  #extrema = np.argwhere(hough_spaces > 0)
+  #with tqdm(total=len(extrema), desc="Converting extrema to 3D points") as pbar:
+  #  for theta_base, a, z  in extrema:
+  #    theta = (theta_base / hough_spaces.shape[0]) * 2 * np.pi
+#
+  #    # get the x and y values
+  #    x = a * np.cos(theta)
+  #    y = a * np.sin(theta)
+  #    points.append([x, y, z])
+  #    colors.append([hough_spaces[theta_base, a, z], 0, 0])
+  #    pbar.update(1)
 
   # normalize the colors
   colors = np.array(colors)
@@ -496,12 +778,12 @@ def test_hough():
 
   o3d.visualization.draw_geometries([pcd])
 
-  """
+  
   colors *= 255
   colors = colors.astype(np.uint8)
-
+  """
   # write the points to a ply file
-  with open("test_arbitrary_angle.ply", "w") as file:
+  with open("test_arbitrary_angle_sausage.ply", "w") as file:
     file.write("ply\n")
     file.write("format ascii 1.0\n")
     file.write("element vertex " + str(len(points)) + "\n")
@@ -514,6 +796,7 @@ def test_hough():
     file.write("end_header\n")
     for i, point in enumerate(points):
       file.write(str(float(point[1])) + " " + str(float(point[2])) + " " + str(float(point[0])) + " " + str(colors[i][0]) + " " + str(colors[i][1]) + " " + str(colors[i][2]) + "\n")
+  
   
   theta1 = random.randint(0, hough_spaces.shape[0] - 1)
   theta2 = random.randint(0, hough_spaces.shape[0] - 1)
@@ -557,13 +840,14 @@ def main():
   #test_img = cv2.imread("test/cylinder_test.py", 0)
   #plt.imshow(test_img, cmap="gray")
   #plt.show()
-
+#
   #test_hough()
   #return
 
   #dir = os.path.join("..", "scratch", "diagonal_angle", "cropped")
-  dir = os.path.join("..", "scratch", "60d_100mm_10mm_voronoi")
+  #dir = os.path.join("..", "scratch", "60d_100mm_10mm_voronoi", "rows")
   #dir = os.path.join("..", "scratch", "circle_moving")
+  dir = os.path.join("..", "scratch", "75d_100mm_10mm_honey")
   full_hough_to_ply(dir)
 
 if __name__ == "__main__":
