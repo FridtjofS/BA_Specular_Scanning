@@ -21,7 +21,7 @@ def full_hough_to_ply(dir):
   # filter out every frame thats not an int
   frame_names = [frame for frame in frame_names if frame.split('.')[0].isdigit()]
   frame_names = sorted(frame_names, key=lambda x: int(x.split('.')[0]))
-  #frame_names = frame_names[::80]
+  frame_names = frame_names[::40]
   frames = [cv2.imread(os.path.join(dir, frame), 0) for frame in frame_names if frame.endswith('.png')]
   theta_max = len(frames)
 
@@ -92,18 +92,19 @@ def full_hough_to_ply(dir):
     plt.imshow(hough_spaces[0], cmap='jet')
     plt.show()
 
+    hough_spaces = post_process_hough_3d(hough_spaces)
 
     #hough_spaces = post_process_hough(hough_spaces)
-    with tqdm(total=hough_spaces.shape[0], desc="Post processing hough spaces") as pbar:
-      for i, hough_space in enumerate(hough_spaces):  
-        #plt.imshow(hough_spaces[i], cmap='jet')
-        #plt.show()
-        hough_spaces[i] = post_process_hough(hough_space)
-        
-        
-        
-        #hough_spaces[i, 295, 168] = 1000
-        pbar.update(1)
+    #with tqdm(total=hough_spaces.shape[0], desc="Post processing hough spaces") as pbar:
+    #  for i, hough_space in enumerate(hough_spaces):  
+    #    #plt.imshow(hough_spaces[i], cmap='jet')
+    #    #plt.show()
+    #    hough_spaces[i] = post_process_hough(hough_space)
+    #    
+    #    
+    #    
+    #    #hough_spaces[i, 295, 168] = 1000
+    #    pbar.update(1)
 
     
 
@@ -521,6 +522,19 @@ def post_process_hough_3d(hough_spaces):
 
   # find local maximas
   print("Finding local maximas...")
+
+  # non maximum suppression
+
+  # get the coordinates of the local maximas
+
+  #import scipy.ndimage as ndi
+  #hough_spaces = ndi.maximum_filter(hough_spaces, size=5)
+
+  #return hough_spaces
+
+
+
+
   coordinates_hough = sk.feature.peak_local_max(hough_spaces, threshold_rel = 0.2, min_distance=3)
 
   hough_mask = np.zeros(hough_spaces.shape)
@@ -2100,8 +2114,8 @@ def single_point_to_hough_spaces():
 
   points.append([54, 43])
   points.append([54, 43])
-  points.append([54, 43])
-  points.append([54, 43])
+  #points.append([54, 43])
+  #points.append([54, 43])
   #points.append([0, 0])
 
   for i, point in enumerate(points):
@@ -2177,6 +2191,27 @@ def hough_coordinate_with_known_angle(ellipse_ratio, phi, theta_base, theta_max,
 
   return theta, a, z
 
+def hough_coordinate_with_known_radius(ellipse_ratio, a, theta_base, theta_max, rad_max, x, y):
+  b = a * ellipse_ratio
+
+  x_rel = x - rad_max
+
+  y_rel = (b * np.sqrt(a**2 - x_rel**2)) / a # wolfram alpha
+  if a == x_rel:
+    y_rel = 0
+
+  z = int(y - y_rel)
+  #z1 = int(y + y_rel)
+
+  y_im = np.sqrt(a**2 - x_rel**2) if a != x_rel else 0
+
+  #print (f"x: {x}, y: {y}, x_rel: {x_rel}, y_rel: {y_rel}, z0: {z0}, z1: {z1}") if a == 295 else None
+
+  # get the theta values for the ellipses
+  theta = int(((np.pi + math.atan2(x_rel, y_im) - theta_base) % (2 * np.pi))  / (2 * np.pi) * (theta_max)) % theta_max
+
+  return theta, a, z
+
 
 def calibrate_hough_spaces(hough_spaces, ellipse_ratio, point1, point2, point1_true, point2_true):
   # point1 and point2 are of shape x, y, phi
@@ -2248,13 +2283,488 @@ def combine_hough_spaces(hough_spaces1, hough_spaces2, transformation1, transfor
 
   return hough_spaces
     
+
+def generate_aruco_markers(dir, count):
+  aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+
+  for i in range(count):
+    marker = cv2.aruco.generateImageMarker(aruco_dict, i, 256)
+    cv2.imwrite(f"{dir}/marker_{i}.png", marker)
+  return
+
+
+
+
+
+  # generate the markers
+  marker1 = cv2.aruco.generateImageMarker(aruco_dict, 0, 200)
+  marker2 = cv2.aruco.generateImageMarker(aruco_dict, 1, 200)
+  marker3 = cv2.aruco.generateImageMarker(aruco_dict, 2, 200)
+  marker4 = cv2.aruco.generateImageMarker(aruco_dict, 3, 200)
+  marker5 = cv2.aruco.generateImageMarker(aruco_dict, 4, 200)
+
+
+  # save the markers
+  cv2.imwrite("marker1.png", marker1)
+  cv2.imwrite("marker2.png", marker2)
+  cv2.imwrite("marker3.png", marker3)
+  cv2.imwrite("marker4.png", marker4)
+  cv2.imwrite("marker5.png", marker5)
+
+
+def find_aruco_markers(image):
+  aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+  parameters = cv2.aruco.DetectorParameters()
+  detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
+
+  corners, ids, rejectedImgPoints = detector.detectMarkers(image)
+
+  # draw the markers
+  #image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+  #cv2.aruco.drawDetectedMarkers(image, corners, ids)
+
+  #plt.imshow(image)
+  #plt.show()
+
+  # get the upper left and upper right corners of the first and second marker
+
+  points = []
+
+  for i in range(len(corners)):
+    points.append(corners[i][0][1])
+    points.append(corners[i][0][2])
+
+  return points
+
+
+  #coord_a = corners[0][0][0]
+  #coord_b = corners[0][0][1]
+#
+  #return coord_a, coord_b
+
+def ellipse_residuals(params, points):
+  x0, y0, a, b = params
+  residuals = []
+  for x, y in points:
+      residual = ((x0 - x) ** 2) / a ** 2 + ((y0 - y) ** 2) / b ** 2 - 1
+      residuals.append(residual)
+
+  #regularization = 0.001 * (a + b)
+  #residuals.append(regularization)
+
+  #regularization = 0.1 * (b / a)
+  #residuals.append(regularization)
+
+  return residuals
+
+from scipy.optimize import least_squares
+def fit_ellipse_to_points(points, img_shape, bounds=None):
+  # we assume the orientation of the ellipse is horizontal
+  # returns ellipse parameters a, b, x0, y0
+  # where a is the semi-major axis, b is the semi-minor axis, x0, y0 is the center of the ellipse
+
   
+
+  if bounds is None:
+    # initial guess
+    x0_guess = np.mean([p[0] for p in points])
+    y0_guess = min([p[1] for p in points])
+    a_guess = (max([p[0] for p in points]) - min([p[0] for p in points])) / 2
+    b_guess = (max([p[1] for p in points]) - min([p[1] for p in points])) / 2
+    init_guess = [x0_guess, y0_guess, a_guess, b_guess]
+    bounds = (
+      [0, 0, a_guess, b_guess], # lower bounds
+      [img_shape[1], img_shape[0], img_shape[1] / 2, min(img_shape[0], img_shape[1]/2)] # upper bounds
+    )
+    print(f"Initial guess: {init_guess}")
+  else:
+    margin = 0
+
+    leftmost, rightmost = bounds
+    if leftmost[0] > rightmost[0]:
+      leftmost, rightmost = rightmost, leftmost
+
+    xmin = ((leftmost[0] + rightmost[0]) / 2) - margin
+    xmax = ((leftmost[0] + rightmost[0]) / 2) + margin
+    #ymin = 0
+    #ymax = xmax
+    amin = (rightmost[0] - leftmost[0]) / 2 - margin
+    amax = (rightmost[0] - leftmost[0]) / 2 + margin
+    bmin = 0
+    bmax = amax
+
+    bounds = (
+      [xmin, 0, amin, bmin], # lower bounds
+      [xmax, img_shape[0], amax, bmax] # upper bounds
+    )
+
+    x0_guess = (leftmost[0] + rightmost[0]) / 2
+    y0_guess = max([p[1] for p in points])
+    a_guess = (rightmost[0] - leftmost[0]) / 2
+    b_guess = (max([p[1] for p in points]) - min([p[1] for p in points])) / 2
+    init_guess = [x0_guess, y0_guess, a_guess, b_guess]
+
+
+  print(f"Bounds: {bounds}")
+
+  # fit the ellipse
+  result = least_squares(ellipse_residuals, init_guess, args=(points,), bounds=bounds)
+  x0, y0, a, b = result.x
+  print(f"x0: {x0}, y0: {y0}, a: {a}, b: {b}")
+  return a, b, x0, y0
+
+
+def multiple_images_ellipse_fitting(dir):
+  # get images from dir
+  imgs = [cv2.imread(os.path.join(dir, f), cv2.IMREAD_GRAYSCALE) for f in os.listdir(dir) if f.endswith(".png")]
+  #imgs = imgs[::10]
+  imgs = imgs[:1]
+
+  print(f"Number of images: {len(imgs)}")
+
+  points = []
+  for img in imgs:
+    points_img = find_aruco_markers(img)
+    points.extend(points_img)
+
+
+
+  a, b, x0, y0 = fit_ellipse_to_points(points, imgs[0].shape)
+
+  print(f"Ellipse Ratio: {b / a}")
+
+  # draw in color
+  img = cv2.cvtColor(imgs[0], cv2.COLOR_GRAY2BGR)
+
+  # draw the ellipse on the image in red
+  ellipse = cv2.ellipse(img.copy(), (int(x0), int(y0)), (int(a), int(b)), 0, 0, 360, (0, 0, 255), 2)
+
+  # draw all the points in green
+  for point in points:
+    cv2.circle(ellipse, (int(point[0]), int(point[1])), 1, (0, 255, 0), -1)
+
+  plt.imshow(ellipse)
+  plt.show()
+
+
+
   
+
 
 
 def main():
 
+  #img =  cv2.imread("../scratch/aruco_markers/test4.jpg", cv2.IMREAD_GRAYSCALE)
+  #find_aruco_markers(img)
+  #exit()
+
+
   if True:
+    # ARUCO MARKER DETECTION
+    img = cv2.imread("../scratch/test/test_with_markers_60d.png", cv2.IMREAD_GRAYSCALE)
+    points = find_aruco_markers(img)
+    a, b, x0, y0 = fit_ellipse_to_points(points, img.shape)
+
+    print(f"Ellipse Ratio: {b / a}")
+
+    # draw in color
+    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+    # draw the ellipse on the image in red
+    ellipse = cv2.ellipse(img.copy(), (int(x0), int(y0)), (int(a), int(b)), 0, 0, 360, (255, 0, 0), 4)
+
+    # draw all the points in green
+    for point in points:
+      cv2.circle(ellipse, (int(point[0]), int(point[1])), 4, (0, 255, 0), -1)
+
+    # save the image
+    #cv2.imwrite("../scratch/test/test_with_markers_60d_aruco_fitted.png", ellipse)
+
+  if False:
+    # get hough space
+    hough_spaces = np.load("hough_spaces_voronoi_90d.npy")
+
+    hough_space = hough_spaces[np.random.randint(0, hough_spaces.shape[0])]
+
+    plt.imshow(hough_space, cmap='inferno')
+    plt.show()
+
+    sum = np.sum(hough_space)
+    size = hough_space.shape[0] * hough_space.shape[1]
+    temp = size / sum if sum != 0 else 0.5
+    r = int(temp * min(hough_space.shape[0], hough_space.shape[1]))
+
+    # remove low frequencies by subtracting the lowpass filtered image
+    fspace = np.fft.fft2(hough_space)
+    fspace = np.fft.fftshift(fspace)
+    rows, cols = hough_space.shape
+    crow, ccol = rows // 2, cols // 2
+    # create a mask first, center circle is 1, remaining all zeros
+    mask = np.zeros((rows, cols), np.uint8)
+    center = [crow, ccol]
+    x, y = np.ogrid[:rows, :cols]
+    mask_area = (x - center[0]) ** 2 + (y - center[1]) ** 2 <= r**2
+    mask[mask_area] = 1
+    fshift = fspace * mask
+
+    f_ishift = np.fft.ifftshift(fshift)
+    img_back = np.fft.ifft2(f_ishift)
+    img_back = np.abs(img_back)
+
+    hough_space = hough_space - img_back
+
+    # clip all values below 0 to 0
+    hough_space[hough_space < 0] = 0
+    
+
+    # Weigh the matrix with weights e^(-0.001)*[1,2,...,A_max]
+    for amplitude in range(1, hough_space.shape[0]):
+        hough_space[amplitude, :] = hough_space[amplitude, :] * np.exp(-0.001 * amplitude)
+
+    plt.imshow(hough_space, cmap='inferno')
+    plt.show()
+
+    hough_space2 = hough_space.copy()
+    t, _ = cv2.threshold(hough_space2.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
+    
+    hough_space2[hough_space2 <= t] = 0
+
+
+    # mexican hat filter
+    hough_space = cv2.GaussianBlur(hough_space, (5, 5), 0) - cv2.GaussianBlur(hough_space, (0, 0), 5)
+
+    # clip all values below 0 to 0
+    hough_space[hough_space < 0] = 0
+
+    plt.imshow(hough_space, cmap='inferno')
+    plt.colorbar()
+    plt.show()
+
+    t, _ = cv2.threshold(hough_space.astype(np.uint8), 0, 255, cv2.THRESH_OTSU)
+    
+    hough_space[hough_space <= t] = 0
+
+    # plot both hough spaces
+    fig, axs = plt.subplots(1, 2)
+    axs[0].imshow(hough_space2, cmap='inferno')
+    axs[1].imshow(hough_space, cmap='inferno')
+    plt.show()
+
+
+
+  if True:
+    #dir = "../scratch/dual_angle/voronoi_90d_aruco"
+    #multiple_images_ellipse_fitting(dir)
+    img = cv2.imread("../scratch/test/voronoi_90d_aruco_highres.png", cv2.IMREAD_GRAYSCALE)
+
+    points = find_aruco_markers(img)
+    a, b, x0, y0 = fit_ellipse_to_points(points, img.shape)
+
+    print(f"Ellipse Ratio: {b / a}")
+
+    # draw in color
+    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+    # draw the ellipse on the image in red
+    ellipse = cv2.ellipse(img.copy(), (int(x0), int(y0)), (int(a), int(b)), 0, 0, 360, (0, 0, 255), 2)
+
+    # draw all the points in green
+    for point in points:
+      cv2.circle(ellipse, (int(point[0]), int(point[1])), 1, (0, 255, 0), -1)
+
+    plt.imshow(ellipse)
+    plt.show()
+
+  if False: #hough transform dir
+    dir = "../scratch/dual_angle/voronoi_60d"
+    full_hough_to_ply(dir)
+
+
+
+
+  #generate_aruco_markers()
+  if False:
+    img = cv2.imread("../scratch/test/test_with_markers_90d_4xres.png", cv2.IMREAD_GRAYSCALE)
+    points = find_aruco_markers(img)
+
+
+    a, b, x0, y0 = fit_ellipse_to_points(points, img.shape)
+    print(f"Ellipse Ratio: {b / a}")
+
+    # draw the ellipse on the image
+    ellipse = cv2.ellipse(img.copy(), (int(x0), int(y0)), (int(a), int(b)), 0, 0, 360, 255, 2)
+
+    #plt.imshow(ellipse, cmap='gray')
+    #plt.show()
+
+    # asking user if ellipse fits well, otherwise, click leftmost and rightmost points of the ellipse
+    # if the ellipse does not fit well, we will use the points to fit the ellipse
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    ax.set_title("Does the ellipse fit well? If not, click the leftmost and rightmost points of the ellipse, otherwise, close the window")
+    ax.imshow(ellipse, cmap='gray')
+    # set title asking user if the ellipse fits well
+
+    # get the points
+    try:
+      bounding_points = plt.ginput(2)
+      plt.close()
+    except:
+      pass
+
+    if len(bounding_points) > 0:
+      print(bounding_points)
+
+      # fit the ellipse to the points
+      a, b, x0, y0 = fit_ellipse_to_points(points, img.shape, bounds=bounding_points)
+
+      print(f"Ellipse Ratio: {b / a}")
+
+      # draw the ellipse on the image
+      ellipse = cv2.ellipse(img.copy(), (int(x0), int(y0)), (int(a), int(b)), 0, 0, 360, 255, 2)
+
+      plt.imshow(ellipse, cmap='gray')
+      plt.show()
+    return
+  
+  if False:
+    hough_spaces = np.load("hough_spaces_voronoi_60d.npy")
+    hough_spaces = hough_spaces[::8]
+
+    rands = np.random.randint(0, hough_spaces.shape[0], 3)
+
+    for rand in rands:
+      plt.imshow(hough_spaces[rand], cmap='inferno')
+      plt.show()
+
+    hough_spaces_post = post_process_hough_3d(hough_spaces)
+
+    for rand in rands:
+      plt.imshow(hough_spaces_post[rand], cmap='inferno')
+      plt.show()
+
+    # plot
+    extrema = np.argwhere(hough_spaces_post > 0)
+
+    points = []
+    colors = []
+
+    for theta_base, a, z  in extrema:
+      colors.append([hough_spaces_post[theta_base, a, z], 0, 0])
+      theta = (theta_base / (hough_spaces_post.shape[0] - 1)) * 2 * np.pi
+      # get the x and y values
+      x = a * np.cos(theta)
+      y = a * np.sin(theta)
+      points.append([x, y, z])
+
+    colors = np.array(colors)
+    colors = colors / np.max(colors)
+
+    point_cloud = o3d.geometry.PointCloud()
+    point_cloud.points = o3d.utility.Vector3dVector(points)
+    point_cloud.colors = o3d.utility.Vector3dVector(colors)
+
+    o3d.visualization.draw_geometries([point_cloud])
+
+
+
+
+  if False:
+    # --------------------------------------------------------------------------
+    print("Before:\n")
+    hough_spaces1 = np.load("hough_spaces_voronoi_60d.npy")
+    hough_spaces2 = np.load("hough_spaces_voronoi_90d.npy")
+    hough_spaces1 = hough_spaces1[::4]
+    hough_spaces2 = hough_spaces2[::4]
+
+    rands = np.random.randint(0, hough_spaces1.shape[0], 3)
+
+    for rand in rands:
+      fig, axs = plt.subplots(1, 2)
+      axs[0].imshow(hough_spaces1[rand], cmap='inferno')
+      axs[1].imshow(hough_spaces2[rand], cmap='inferno')
+      plt.show()
+
+
+    hough_spaces1_post = np.load("post_processed_voronoi_60d.npy")
+    hough_spaces2_post = np.load("post_processed_voronoi_90d.npy")
+
+    extrema1 = np.argwhere(hough_spaces1_post > 0)
+    extrema2 = np.argwhere(hough_spaces2_post > 0)
+
+    points1 = []
+    points2 = []
+
+    for theta_base, a, z  in extrema1:
+      theta = (theta_base / (hough_spaces1_post.shape[0] - 1)) * 2 * np.pi
+      # get the x and y values
+      x = a * np.cos(theta)
+      y = a * np.sin(theta)
+      points1.append([x, y, z])
+
+    for theta_base, a, z  in extrema2:
+      theta = (theta_base / (hough_spaces2_post.shape[0] - 1)) * 2 * np.pi
+      # get the x and y values
+      x = a * np.cos(theta)
+      y = a * np.sin(theta)
+      points2.append([x, y, z])
+
+    point_cloud1 = o3d.geometry.PointCloud()
+    point_cloud1.points = o3d.utility.Vector3dVector(points1)
+    point_cloud1.paint_uniform_color([1, 0, 0])
+
+    point_cloud2 = o3d.geometry.PointCloud()
+    point_cloud2.points = o3d.utility.Vector3dVector(points2)
+    point_cloud2.paint_uniform_color([0, 0, 1])
+
+    o3d.visualization.draw_geometries([point_cloud1, point_cloud2])
+
+    # --------------------------------------------------------------------------
+    print("After:\n")
+
+    hough_spaces = np.load("hough_spaces_voronoi_combined.npy")
+
+    for rand in rands:
+      plt.imshow(hough_spaces[rand], cmap='inferno')
+      plt.show()
+
+    hough_spaces_post = np.load("hough_spaces_voronoi_combined_post.npy")
+
+    extrema = np.argwhere(hough_spaces_post > 0)
+
+    transformation = np.load("transformation1.npy")
+    scale_radius, scale_height, translation_angle, translation_height = transformation
+
+    points = []
+    colors = []
+
+    for theta_base, a, z  in extrema:
+      colors.append([hough_spaces_post[theta_base, a, z], 0, 0])
+      theta_base = (theta_base + translation_angle) % hough_spaces_post.shape[0]
+      a = a * scale_radius
+      z = z * scale_height + translation_height
+
+      theta = (theta_base / (hough_spaces_post.shape[0] - 1)) * 2 * np.pi
+      # get the x and y values
+      x = a * np.cos(theta)
+      y = a * np.sin(theta)
+      points.append([x, y, z])
+
+    colors = np.array(colors)
+    colors = colors / np.max(colors)
+
+
+    point_cloud = o3d.geometry.PointCloud()
+    point_cloud.points = o3d.utility.Vector3dVector(points)
+    point_cloud.colors = o3d.utility.Vector3dVector(colors)
+
+    o3d.visualization.draw_geometries([point_cloud])
+
+    o3d.io.write_point_cloud("test_cloud_scaled.ply", point_cloud)
+
+  if True:
+
     hough_spaces1 = np.load("hough_spaces_voronoi_60d.npy")#np.load("post_processed_voronoi_60d.npy")
     hough_spaces2 = np.load("hough_spaces_voronoi_90d.npy")#np.load("post_processed_voronoi_90d.npy")
     hough_spaces1 = hough_spaces1[::4]
@@ -2263,12 +2773,36 @@ def main():
     print(hough_spaces1.shape)
     print(hough_spaces2.shape)
 
+    #img1 = cv2.imread("../scratch/test/test_with_markers_60d.png", cv2.IMREAD_GRAYSCALE)
+    #img2 = cv2.imread("../scratch/test/test_with_markers_90d.png", cv2.IMREAD_GRAYSCALE)
+    #coord1_a, coord1_b = find_aruco_markers(img1)
+    #coord2_a, coord2_b = find_aruco_markers(img2)
+
     transformation1 = calibrate_hough_spaces(hough_spaces1, 0.5, [713, 971, 45], [713, 1008, 45], [0, 0.4, -0.405], [0, 0.4, -0.455]) # outer: [713, 971, 45], inner: [744, 953, 45]
     transformation2 = calibrate_hough_spaces(hough_spaces2, 0, [710, 898, 45], [710, 942, 45], [0, 0.4, -0.405], [0, 0.4, -0.455]) # outer: [710, 898, 45], inner: [741, 897, 45]
 
+    #transformation1 = calibrate_hough_spaces(hough_spaces1, 0.5, [coord1_a[0], coord1_a[1], 45], [coord1_b[0], coord1_b[1], 45], [0, 0.4, -0.405], [0, 0.45, -0.455]) # outer: [713, 971, 45], inner: [744, 953, 45]
+    #transformation2 = calibrate_hough_spaces(hough_spaces2, 0, [coord2_a[0], coord2_a[1], 45], [coord2_b[0], coord2_b[1], 45], [0, 0.4, -0.405], [0, 0.45, -0.455]) # outer: [710, 898, 45], inner: [741, 897, 45]
+
+
+    #np.save("transformation1.npy", transformation1)
+    
+
     hough_spaces = combine_hough_spaces(hough_spaces1, hough_spaces2, transformation1, transformation2)
 
+    rands = np.random.randint(0, hough_spaces.shape[0], 3)
+
+    for rand in rands:
+      plt.imshow(hough_spaces[rand], cmap='inferno')
+      plt.show()
+
+
+
+    #np.save("hough_spaces_voronoi_combined.npy", hough_spaces)
+
     hough_spaces = post_process_hough_3d(hough_spaces)
+
+    #np.save("hough_spaces_voronoi_combined_post.npy", hough_spaces)
 
     extremas = np.argwhere(hough_spaces > 0)
     scale_radius, scale_height, translation_angle, translation_height = transformation1
@@ -2282,6 +2816,9 @@ def main():
       a = a * scale_radius
       z = z * scale_height + translation_height
 
+      if z <= -0.404:
+        continue
+
       theta = (theta_base / (hough_spaces.shape[0] - 1)) * 2 * np.pi
       # get the x and y values
       x = a * np.cos(theta)
@@ -2293,6 +2830,9 @@ def main():
     point_cloud.paint_uniform_color([1, 0, 0])
 
     o3d.visualization.draw_geometries([point_cloud])
+
+    # save the point cloud
+    o3d.io.write_point_cloud("test_cloud_scaled.ply", point_cloud)
 
     return
 
